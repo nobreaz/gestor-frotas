@@ -5,7 +5,7 @@ import 'package:postgres/postgres.dart';
 /// mesmo que o servidor rode em UTC (como na maioria das hospedagens).
 const companyTimeZone = 'America/Sao_Paulo';
 
-/// Intervalo que a solicitação [alias] ocupa na agenda (mesma regra do app):
+/// Intervalo que a solicitação [alias] ocupa na agenda do USUÁRIO (RN 4.4):
 /// - em uso, começa na retirada real (pode ter sido antes da saída prevista);
 /// - em uso e com a devolução atrasada, ocupa até o check-in (sem fim).
 String occupiedRangeSql(String alias) =>
@@ -18,6 +18,49 @@ String occupiedRangeSql(String alias) =>
            THEN 'infinity'::timestamptz
            ELSE $alias.prazo_retorno END,
       '[)')''';
+
+/// Intervalo que a solicitação [alias] ocupa na agenda do VEÍCULO (RN 4.3),
+/// com a margem de um dia (`vehicleFreeFrom` no frota_core):
+/// - aprovada: da saída até a meia-noite do dia seguinte ao retorno
+///   (`veiculo_livre_em`, coluna calculada pelo banco);
+/// - em uso: começa na retirada real; com a devolução atrasada, sem fim;
+/// - finalizada: do check-in até a meia-noite seguinte (devolveu atrasado
+///   na terça → só fica livre na quarta; devolveu adiantado → libera antes).
+/// Usar junto com [vehicleHoldsSql].
+String vehicleOccupiedRangeSql(String alias) =>
+    '''
+    tstzrange(
+      CASE WHEN $alias.status = 'finalizada' THEN $alias.check_in_em
+           WHEN $alias.status = 'emUso'
+           THEN least(coalesce($alias.check_out_em, $alias.saida), $alias.saida)
+           ELSE $alias.saida END,
+      CASE WHEN $alias.status = 'finalizada'
+           THEN (($alias.check_in_em AT TIME ZONE '$companyTimeZone')::date + 1)
+                ::timestamp AT TIME ZONE '$companyTimeZone'
+           WHEN $alias.status = 'emUso' AND $alias.prazo_retorno < now()
+           THEN 'infinity'::timestamptz
+           ELSE $alias.veiculo_livre_em END,
+      '[)')''';
+
+/// Solicitações que ocupam a agenda do veículo em [vehicleOccupiedRangeSql].
+/// Finalizada só conta até a meia-noite seguinte à devolução (margem); o
+/// filtro de data evita varrer o histórico inteiro.
+String vehicleHoldsSql(String alias) =>
+    '''
+    ($alias.status IN ('aprovada', 'emUso')
+     OR ($alias.status = 'finalizada'
+         AND $alias.check_in_em > now() - interval '2 days'))''';
+
+/// Reserva aprovada cujo veículo ainda está numa viagem atrasada.
+typedef AtRiskRequest = ({
+  int id,
+  int requesterId,
+  String destination,
+  String vehicle,
+
+  /// "DD/MM/AAAA HH:MM" no fuso da empresa (o servidor pode rodar em UTC).
+  String departure,
+});
 
 /// Solicitação que voltou para Pendente porque o veículo deixou de atendê-la.
 typedef ReleasedRequest = ({int id, int requesterId, String destination});
@@ -37,7 +80,9 @@ class SolicitacoesRepository {
            s.status::text AS status, s.veiculo_id, s.justificativa_recusa,
            s.km_saida, s.km_retorno, s.check_out_em, s.check_in_em,
            s.obs_check_out, s.obs_check_in,
-           s.aprovador_id, a.nome AS aprovador, s.decidido_em
+           s.aprovador_id, a.nome AS aprovador, s.decidido_em,
+           s.falha_retirada_em, s.falha_retirada_motivo::text AS falha_motivo,
+           s.falha_retirada_obs, s.falha_retirada_veiculo_id
     FROM solicitacoes s
     JOIN usuarios u ON u.id = s.solicitante_id
     LEFT JOIN usuarios a ON a.id = s.aprovador_id''';
@@ -62,6 +107,11 @@ class SolicitacoesRepository {
     'obs_check_in': 'text',
     'aprovador_id': 'bigint',
     'decidido_em': 'timestamptz',
+    'falha_retirada_em': 'timestamptz',
+    'falha_retirada_motivo': 'motivo_falha_retirada',
+    'falha_retirada_obs': 'text',
+    'falha_retirada_veiculo_id': 'bigint',
+    'alerta_risco_em': 'timestamptz',
   };
 
   /// [forUpdate] trava a solicitação até o fim da transação (usar dentro
@@ -130,16 +180,74 @@ class SolicitacoesRepository {
     return (result.first.first! as DateTime).toUtc();
   }
 
-  /// Saída e prazo de devolução gravados (o prazo não está no modelo).
-  Future<({DateTime start, DateTime end})> periodOf(int id) async {
+  /// Saída, prazo de devolução e fim da ocupação do veículo (com a margem
+  /// de um dia), como gravados no banco.
+  Future<({DateTime start, DateTime end, DateTime vehicleEnd})> periodOf(
+    int id,
+  ) async {
     final result = await _db.execute(
       Sql.named(
-        'SELECT saida, prazo_retorno FROM solicitacoes WHERE id = @id',
+        'SELECT saida, prazo_retorno, veiculo_livre_em '
+        'FROM solicitacoes WHERE id = @id',
       ),
       parameters: {'id': id},
     );
     final row = result.single;
-    return (start: row[0]! as DateTime, end: row[1]! as DateTime);
+    return (
+      start: row[0]! as DateTime,
+      end: row[1]! as DateTime,
+      vehicleEnd: row[2]! as DateTime,
+    );
+  }
+
+  /// Já é o dia da saída (ou depois) no fuso da empresa?
+  Future<bool> departureDayReached(int id) => _exists(
+    '''
+    SELECT 1 FROM solicitacoes
+    WHERE id = @id
+      AND now() >= ((saida AT TIME ZONE @zone)::date)::timestamp
+                   AT TIME ZONE @zone''',
+    {'id': id, 'zone': companyTimeZone},
+  );
+
+  /// Marca (uma vez só) as reservas aprovadas que saem em até [window] e
+  /// cujo veículo ainda está numa viagem com a devolução atrasada.
+  /// O `UPDATE ... WHERE alerta_risco_em IS NULL` garante que duas
+  /// chamadas ao mesmo tempo não avisem em dobro.
+  Future<List<AtRiskRequest>> markAtRisk({
+    Duration window = const Duration(hours: 72),
+  }) async {
+    final result = await _db.execute(
+      Sql.named('''
+        UPDATE solicitacoes r
+        SET alerta_risco_em = now()
+        FROM veiculos v
+        WHERE v.id = r.veiculo_id
+          AND r.status = 'aprovada'
+          AND r.alerta_risco_em IS NULL
+          AND r.saida < now() + make_interval(secs => @window)
+          AND EXISTS (
+            SELECT 1 FROM solicitacoes o
+            WHERE o.veiculo_id = r.veiculo_id
+              AND o.id <> r.id
+              AND o.status = 'emUso'
+              AND o.prazo_retorno < now()
+          )
+        RETURNING r.id, r.solicitante_id, r.destino,
+                  v.modelo || ' · ' || v.placa,
+                  to_char(r.saida AT TIME ZONE @zone, 'DD/MM/YYYY HH24:MI')'''),
+      parameters: {'window': window.inSeconds, 'zone': companyTimeZone},
+    );
+    return [
+      for (final row in result)
+        (
+          id: row[0]! as int,
+          requesterId: row[1]! as int,
+          destination: row[2]! as String,
+          vehicle: row[3]! as String,
+          departure: row[4]! as String,
+        ),
+    ];
   }
 
   /// RN 4.4: o usuário já tem outra solicitação ativa (pendente, aprovada ou
@@ -165,8 +273,9 @@ class SolicitacoesRepository {
     },
   );
 
-  /// RN 4.3: o veículo está livre (sem reserva aprovada ou em uso) no
-  /// período [start]–[end] inteiro?
+  /// RN 4.3: o veículo está livre (sem reserva aprovada ou em uso, nem
+  /// devolvido hoje) no período [start]–[end] inteiro? [end] já deve
+  /// incluir a margem (`vehicleEnd` de [periodOf]).
   Future<bool> vehicleIsFree({
     required int vehicleId,
     required DateTime start,
@@ -177,8 +286,8 @@ class SolicitacoesRepository {
     SELECT 1 FROM solicitacoes o
     WHERE o.veiculo_id = @vehicle
       AND o.id <> @ignore
-      AND o.status IN ('aprovada', 'emUso')
-      AND ${occupiedRangeSql('o')}
+      AND ${vehicleHoldsSql('o')}
+      AND ${vehicleOccupiedRangeSql('o')}
           && tstzrange(@start::timestamptz, @end::timestamptz, '[)')''',
     {
       'vehicle': vehicleId,
@@ -261,7 +370,7 @@ class SolicitacoesRepository {
       Sql.named('''
         UPDATE solicitacoes
         SET status = 'pendente', veiculo_id = NULL,
-            aprovador_id = NULL, decidido_em = NULL
+            aprovador_id = NULL, decidido_em = NULL, alerta_risco_em = NULL
         WHERE veiculo_id = @vehicle AND status = 'aprovada'
           ${seats == null ? '' : 'AND passageiros > @seats'}
         RETURNING id, solicitante_id, destino'''),
@@ -289,6 +398,7 @@ class SolicitacoesRepository {
     final m = row.toColumnMap();
     DateTime? local(String key) => (m[key] as DateTime?)?.toLocal();
     final returnDate = m['data_retorno'] as DateTime?;
+    final failure = m['falha_motivo'] as String?;
 
     return RequestModel(
       id: m['id'] as int,
@@ -315,6 +425,12 @@ class SolicitacoesRepository {
       approverId: m['aprovador_id'] as int?,
       approverName: m['aprovador'] as String?,
       decidedAt: local('decidido_em'),
+      pickupFailedAt: local('falha_retirada_em'),
+      pickupFailureReason: failure == null
+          ? null
+          : PickupFailureReason.values.byName(failure),
+      pickupFailureNotes: m['falha_retirada_obs'] as String?,
+      pickupFailedVehicleId: m['falha_retirada_veiculo_id'] as int?,
     );
   }
 }

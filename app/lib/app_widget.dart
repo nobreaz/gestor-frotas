@@ -25,6 +25,9 @@ class AppWidget extends StatelessWidget {
   /// Permite navegar de fora das telas (ex.: sessão expirou → login).
   static final navigatorKey = GlobalKey<NavigatorState>();
 
+  /// Permite mostrar avisos de fora das telas (ex.: push com o app aberto).
+  static final messengerKey = GlobalKey<ScaffoldMessengerState>();
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -32,6 +35,7 @@ class AppWidget extends StatelessWidget {
       builder: (context, child) {
         return MaterialApp(
           navigatorKey: navigatorKey,
+          scaffoldMessengerKey: messengerKey,
           theme: ThemeData(
             primarySwatch: Colors.blue,
             fontFamily: AppTextStyles.fontFamily, // Instrument Sans no app todo

@@ -1,5 +1,15 @@
-/// Tipos de notificação enviados ao solicitante.
-enum NotificationType { sent, approved, rejected, canceled, reverted }
+/// Tipos de notificação.
+/// - Ao solicitante: sent, approved, rejected, canceled, reverted, atRisk.
+/// - Aos Aprovadores: pickupFailed e atRisk.
+enum NotificationType {
+  sent,
+  approved,
+  rejected,
+  canceled,
+  reverted,
+  pickupFailed,
+  atRisk,
+}
 
 extension NotificationTypeX on NotificationType {
   String get title {
@@ -14,6 +24,10 @@ extension NotificationTypeX on NotificationType {
         return 'Solicitação cancelada';
       case NotificationType.reverted:
         return 'Voltou para aprovação';
+      case NotificationType.pickupFailed:
+        return 'Retirada não realizada';
+      case NotificationType.atRisk:
+        return 'Reserva em risco';
     }
   }
 }

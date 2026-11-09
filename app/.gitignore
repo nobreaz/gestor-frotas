@@ -50,3 +50,4 @@ app.*.map.json
 oracleJdk-27/
 # Configuração local (copie env/example.json)
 /env/dev.json
+/env/android.json

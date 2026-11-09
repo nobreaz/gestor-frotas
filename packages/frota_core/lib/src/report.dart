@@ -17,6 +17,12 @@ enum AlertKind {
   cnh,
   devolucaoAtrasada,
   saidaSemAprovacao,
+
+  /// O solicitante não conseguiu retirar e pediu outro veículo.
+  retiradaFalhou,
+
+  /// Reserva aprovada cujo veículo ainda está com uma viagem atrasada.
+  reservaEmRisco,
 }
 
 /// Um item da seção "Precisa de atenção".

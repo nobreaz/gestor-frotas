@@ -192,32 +192,75 @@ class RelatoriosRepository {
     ];
   }
 
-  /// Agora: veículos em uso depois do prazo e pendentes que saem em até
-  /// 48 h (ou já deveriam ter saído) sem aprovação. Atrasos primeiro.
+  /// Agora:
+  /// - veículos em uso depois do prazo;
+  /// - retiradas que falharam e aguardam outro veículo (Pendente);
+  /// - reservas aprovadas que saem em até 72 h com o veículo ainda numa
+  ///   viagem atrasada;
+  /// - pendentes que saem em até 48 h (ou já deveriam ter saído).
+  /// Nessa ordem.
   Future<List<ReportAlert>> requestAlerts() async {
     final result = await _db.execute('''
-      SELECT s.status::text, u.nome, c.modelo, c.placa,
-             to_char(s.prazo_retorno AT TIME ZONE $_tz, 'DD/MM/YYYY HH24:MI'),
-             to_char(s.saida AT TIME ZONE $_tz, 'DD/MM/YYYY HH24:MI'),
-             s.saida < now(), s.destino
-      FROM solicitacoes s
-      JOIN usuarios u ON u.id = s.solicitante_id
-      LEFT JOIN veiculos c ON c.id = s.veiculo_id
-      WHERE (s.status = 'emUso' AND s.prazo_retorno < now())
-         OR (s.status = 'pendente' AND s.saida < now() + interval '48 hours')
-      ORDER BY s.status = 'pendente', s.saida''');
+      WITH alertas AS (
+        SELECT s.*,
+          CASE
+            WHEN s.status = 'emUso' THEN 'devolucaoAtrasada'
+            WHEN s.status = 'pendente' AND s.falha_retirada_em IS NOT NULL
+              THEN 'retiradaFalhou'
+            WHEN s.status = 'aprovada' THEN 'reservaEmRisco'
+            ELSE 'saidaSemAprovacao'
+          END AS tipo
+        FROM solicitacoes s
+        WHERE (s.status = 'emUso' AND s.prazo_retorno < now())
+           OR (s.status = 'pendente'
+               AND (s.falha_retirada_em IS NOT NULL
+                    OR s.saida < now() + interval '48 hours'))
+           OR (s.status = 'aprovada'
+               AND s.saida < now() + interval '72 hours'
+               AND EXISTS (
+                 SELECT 1 FROM solicitacoes o
+                 WHERE o.veiculo_id = s.veiculo_id AND o.id <> s.id
+                   AND o.status = 'emUso' AND o.prazo_retorno < now()))
+      )
+      SELECT a.tipo, u.nome, coalesce(c.modelo, f.modelo),
+             coalesce(c.placa, f.placa),
+             to_char(a.prazo_retorno AT TIME ZONE $_tz, 'DD/MM/YYYY HH24:MI'),
+             to_char(a.saida AT TIME ZONE $_tz, 'DD/MM/YYYY HH24:MI'),
+             a.saida < now(), a.destino
+      FROM alertas a
+      JOIN usuarios u ON u.id = a.solicitante_id
+      LEFT JOIN veiculos c ON c.id = a.veiculo_id
+      LEFT JOIN veiculos f ON f.id = a.falha_retirada_veiculo_id
+      ORDER BY array_position(
+        ARRAY['devolucaoAtrasada', 'retiradaFalhou', 'reservaEmRisco',
+              'saidaSemAprovacao'], a.tipo), a.saida''');
 
     return [
       for (final row in result)
-        if (row[0] == 'emUso')
-          ReportAlert(
+        switch (row[0]! as String) {
+          'devolucaoAtrasada' => ReportAlert(
             kind: AlertKind.devolucaoAtrasada,
             critical: true,
             title: '${row[2]} · ${row[3]}',
             message: 'Com ${row[1]}: devolução era até ${row[4]}',
-          )
-        else
-          ReportAlert(
+          ),
+          'retiradaFalhou' => ReportAlert(
+            kind: AlertKind.retiradaFalhou,
+            critical: true,
+            title: '${row[1]} · ${row[7]}',
+            message:
+                'Não conseguiu retirar o ${row[2]} · ${row[3]} '
+                '(saída ${row[5]}). Aloque outro veículo',
+          ),
+          'reservaEmRisco' => ReportAlert(
+            kind: AlertKind.reservaEmRisco,
+            critical: true,
+            title: '${row[2]} · ${row[3]}',
+            message:
+                'Reserva de ${row[1]} sai ${row[5]} e o veículo '
+                'ainda não voltou da viagem anterior',
+          ),
+          _ => ReportAlert(
             kind: AlertKind.saidaSemAprovacao,
             critical: row[6]! as bool,
             title: '${row[1]} · ${row[7]}',
@@ -225,6 +268,7 @@ class RelatoriosRepository {
                 ? 'Saída era ${row[5]} e o pedido segue pendente'
                 : 'Sai ${row[5]} e ainda não foi aprovado',
           ),
+        },
     ];
   }
 

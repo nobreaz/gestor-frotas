@@ -13,3 +13,7 @@ oracleJdk-27/
 .env
 .env.*
 !.env.example
+
+# Chave da conta de serviço do Firebase (push): SECRETA, nunca no Git.
+*firebase-adminsdk*.json
+server/secrets/

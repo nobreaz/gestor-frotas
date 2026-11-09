@@ -327,4 +327,63 @@ void main() {
       );
     });
   });
+
+  group('Margem de um dia e falha na retirada', () {
+    test('veículo livre à meia-noite do dia seguinte ao retorno', () {
+      expect(vehicleFreeFrom(DateTime(2026, 11, 10)), DateTime(2026, 11, 11));
+      // Virada de mês e de ano.
+      expect(vehicleFreeFrom(DateTime(2026, 11, 30)), DateTime(2026, 12));
+      expect(vehicleFreeFrom(DateTime(2026, 12, 31)), DateTime(2027));
+      final r = RequestModel(
+        id: 1,
+        reason: 'r',
+        destination: 'd',
+        passengers: 1,
+        returnDate: DateTime(2026, 11, 10),
+        returnPeriod: ReturnPeriod.manha,
+      );
+      expect(r.vehicleFreeAt, DateTime(2026, 11, 11));
+    });
+
+    test('pode informar falha só se aprovada e a partir do dia da saída', () {
+      final r = RequestModel(
+        id: 1,
+        reason: 'r',
+        destination: 'd',
+        passengers: 1,
+        departure: DateTime(2026, 11, 10, 8),
+        status: RequestStatus.aprovada,
+      );
+      expect(r.canReportPickupFailure(now: DateTime(2026, 11, 9, 23)), isFalse);
+      expect(
+        r.canReportPickupFailure(now: DateTime(2026, 11, 10, 0, 5)),
+        isTrue,
+      );
+      expect(r.canReportPickupFailure(now: DateTime(2026, 11, 12)), isTrue);
+      r.status = RequestStatus.pendente;
+      expect(r.canReportPickupFailure(now: DateTime(2026, 11, 10, 9)), isFalse);
+    });
+
+    test('JSON leva a falha e needsReallocation vale só em pendente', () {
+      final r = RequestModel(
+        id: 1,
+        reason: 'r',
+        destination: 'd',
+        passengers: 1,
+        pickupFailedAt: DateTime.utc(2026, 11, 10, 11),
+        pickupFailureReason: PickupFailureReason.problemaVeiculo,
+        pickupFailureNotes: 'Pneu furado',
+        pickupFailedVehicleId: 4,
+      );
+      final back = RequestModel.fromJson(r.toJson());
+      expect(back.pickupFailureReason, PickupFailureReason.problemaVeiculo);
+      expect(back.pickupFailureNotes, 'Pneu furado');
+      expect(back.pickupFailedVehicleId, 4);
+      expect(back.pickupFailedAt!.isAtSameMomentAs(r.pickupFailedAt!), isTrue);
+      expect(back.needsReallocation, isTrue);
+      back.status = RequestStatus.aprovada;
+      expect(back.needsReallocation, isFalse);
+      expect(PickupFailureReason.outro.requiresNotes, isTrue);
+    });
+  });
 }

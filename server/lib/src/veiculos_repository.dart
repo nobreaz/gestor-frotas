@@ -51,30 +51,35 @@ class VeiculosRepository {
   /// RN 4.1: veículos que podem atender o período [start]–[end] com
   /// [passengers] pessoas. Fora de manutenção/inativos, com lugares
   /// suficientes e livres na agenda; os de menor quilometragem primeiro.
+  /// [end] já inclui a margem de um dia (`vehicleEnd` de `periodOf`).
   /// [ignoreRequestId]: a própria solicitação (ao reavaliar uma reserva).
+  /// [excludeVehicleId]: veículo que falhou na retirada desta solicitação.
   Future<List<VehicleModel>> eligible({
     required int passengers,
     required DateTime start,
     required DateTime end,
     int? ignoreRequestId,
+    int? excludeVehicleId,
   }) async {
     final result = await _db.execute(
       Sql.named('''
         SELECT $_columns FROM veiculos v
         WHERE v.status NOT IN ('emManutencao', 'inativo')
           AND v.lugares >= @passengers
+          AND v.id <> @excluded
           AND NOT EXISTS (
             SELECT 1 FROM solicitacoes o
             WHERE o.veiculo_id = v.id
               AND o.id <> @ignore
-              AND o.status IN ('aprovada', 'emUso')
-              AND ${occupiedRangeSql('o')}
+              AND ${vehicleHoldsSql('o')}
+              AND ${vehicleOccupiedRangeSql('o')}
                   && tstzrange(@start::timestamptz, @end::timestamptz, '[)')
           )
         ORDER BY v.quilometragem, v.id'''),
       parameters: {
         'passengers': passengers,
         'ignore': ignoreRequestId ?? 0,
+        'excluded': excludeVehicleId ?? 0,
         'start': start.toUtc().toIso8601String(),
         'end': end.toUtc().toIso8601String(),
       },

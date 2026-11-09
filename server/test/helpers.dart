@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:dart_frog/dart_frog.dart';
 import 'package:frota_core/frota_core.dart';
+import 'package:frota_server/src/dispositivos_repository.dart';
 import 'package:frota_server/src/frota_service.dart';
 import 'package:frota_server/src/notificacoes_repository.dart';
 import 'package:frota_server/src/relatorios_repository.dart';
@@ -28,6 +29,9 @@ class MockNotificacoesRepository extends Mock
     implements NotificacoesRepository {}
 
 class MockFrotaService extends Mock implements FrotaService {}
+
+class MockDispositivosRepository extends Mock
+    implements DispositivosRepository {}
 
 UserModel user({
   int id = 1,
@@ -84,6 +88,7 @@ MockRequestContext contextFor(
   NotificacoesRepository? notifications,
   FrotaService? frota,
   RelatoriosRepository? reports,
+  DispositivosRepository? devices,
 }) {
   final context = MockRequestContext();
   when(() => context.request).thenReturn(request);
@@ -103,6 +108,9 @@ MockRequestContext contextFor(
   }
   if (reports != null) {
     when(() => context.read<RelatoriosRepository>()).thenReturn(reports);
+  }
+  if (devices != null) {
+    when(() => context.read<DispositivosRepository>()).thenReturn(devices);
   }
   if (frota != null) when(() => context.read<FrotaService>()).thenReturn(frota);
   if (auth != null) when(() => context.read<SupabaseAuth>()).thenReturn(auth);

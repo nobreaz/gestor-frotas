@@ -30,6 +30,10 @@ extension AlertKindUi on AlertKind {
         return Icons.assignment_late_outlined;
       case AlertKind.saidaSemAprovacao:
         return Icons.hourglass_top;
+      case AlertKind.retiradaFalhou:
+        return Icons.car_crash_outlined;
+      case AlertKind.reservaEmRisco:
+        return Icons.event_busy;
     }
   }
 }

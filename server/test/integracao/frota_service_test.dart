@@ -15,8 +15,10 @@ import 'dart:io';
 import 'package:frota_core/frota_core.dart';
 import 'package:frota_server/src/api_exception.dart';
 import 'package:frota_server/src/config.dart';
+import 'package:frota_server/src/dispositivos_repository.dart';
 import 'package:frota_server/src/frota_service.dart';
 import 'package:frota_server/src/notificacoes_repository.dart';
+import 'package:frota_server/src/push.dart';
 import 'package:frota_server/src/relatorios.dart';
 import 'package:frota_server/src/relatorios_repository.dart';
 import 'package:frota_server/src/request_input.dart';
@@ -462,4 +464,321 @@ void main() {
     // Ida e volta pelo JSON da rota.
     expect(FleetReport.fromJson(report.toJson()).toJson(), report.toJson());
   });
+
+  // -------------------------------------------------------------------
+  // Margem de um dia, falha na retirada e reservas em risco (2026-11-09)
+  // -------------------------------------------------------------------
+
+  /// Altera datas direto no banco (o serviço não deixa criar no passado).
+  /// Os valores são expressões SQL fixas dos próprios testes.
+  Future<void> moveTo(
+    _World w,
+    int id, {
+    required String saida,
+    String? prazo,
+    String? dataRetorno,
+  }) => w.tx.execute(
+    Sql.named('''
+      UPDATE solicitacoes SET saida = $saida
+        ${prazo == null ? '' : ', prazo_retorno = $prazo'}
+        ${dataRetorno == null ? '' : ', data_retorno = $dataRetorno'}
+      WHERE id = @id'''),
+    parameters: {'id': id},
+  );
+
+  const tenMinutesAgo = "now() - interval '10 minutes'";
+
+  scenario('margem: veículo só fica livre à meia-noite seguinte ao retorno', (
+    w,
+  ) async {
+    // Ana volta no dia D (até 18h) com o gol.
+    final a = await w.service.createRequest(w.ana, w.trip());
+    await w.service.approve(w.bruno, a.id, w.gol.id);
+    final period = await w.requests.periodOf(a.id);
+    // D+1 00h em Brasília = 03h UTC.
+    final d = w.trip().returnDate!;
+    expect(period.vehicleEnd, DateTime.utc(d.year, d.month, d.day + 1, 3));
+
+    // Caio sai no dia D às 19h: antes da margem → gol não serve.
+    final sameDay = await w.service.createRequest(
+      w.caio,
+      RequestFields(
+        reason: 'Visita',
+        destination: 'Niterói',
+        passengers: 1,
+        departure: DateTime.utc(d.year, d.month, d.day, 22),
+        returnDate: DateTime(d.year, d.month, d.day + 1),
+        returnPeriod: ReturnPeriod.tarde,
+      ),
+    );
+    final eligible = await w.service.eligibleVehicles(sameDay.id);
+    expect(eligible.map((v) => v.id), isNot(contains(w.gol.id)));
+    await expectLater(
+      w.service.approve(w.bruno, sameDay.id, w.gol.id),
+      _apiError(409),
+    );
+    // O banco também recusa (EXCLUDE com veiculo_livre_em).
+    await w.tx.execute('SAVEPOINT margem');
+    await expectLater(
+      w.tx.execute(
+        Sql.named('''
+          UPDATE solicitacoes SET status = 'aprovada', veiculo_id = @v,
+                 aprovador_id = @b, decidido_em = now()
+          WHERE id = @id'''),
+        parameters: {'v': w.gol.id, 'b': w.bruno.id, 'id': sameDay.id},
+      ),
+      throwsA(isA<ServerException>().having((e) => e.code, 'code', '23P01')),
+    );
+    await w.tx.execute('ROLLBACK TO SAVEPOINT margem');
+  });
+
+  scenario('margem: no dia seguinte ao retorno o veículo já serve', (
+    w,
+  ) async {
+    final a = await w.service.createRequest(w.ana, w.trip());
+    await w.service.approve(w.bruno, a.id, w.gol.id);
+
+    final next = await w.service.createRequest(w.caio, w.trip(days: 4));
+    final eligible = await w.service.eligibleVehicles(next.id);
+    expect(eligible.map((v) => v.id), contains(w.gol.id));
+    final approved = await w.service.approve(w.bruno, next.id, w.gol.id);
+    expect(approved.vehicleId, w.gol.id);
+  });
+
+  scenario(
+    'falha na retirada → novo veículo: pendente, urgente e avisa aprovadores',
+    (w) async {
+      final a = await w.service.createRequest(w.ana, w.trip());
+      await w.service.approve(w.bruno, a.id, w.gol.id);
+
+      // Antes do dia da saída → 409.
+      await expectLater(
+        w.service.reportPickupFailure(
+          w.ana,
+          a.id,
+          reason: PickupFailureReason.naoDevolvido,
+          action: PickupFailureAction.novoVeiculo,
+        ),
+        _apiError(409),
+      );
+      // Só o dono.
+      await moveTo(w, a.id, saida: tenMinutesAgo);
+      await expectLater(
+        w.service.reportPickupFailure(
+          w.caio,
+          a.id,
+          reason: PickupFailureReason.naoDevolvido,
+          action: PickupFailureAction.novoVeiculo,
+        ),
+        _apiError(403),
+      );
+
+      final failed = await w.service.reportPickupFailure(
+        w.ana,
+        a.id,
+        reason: PickupFailureReason.problemaVeiculo,
+        action: PickupFailureAction.novoVeiculo,
+        notes: 'Pneu furado',
+      );
+      expect(failed.status, RequestStatus.pendente);
+      expect(failed.vehicleId, isNull);
+      expect(failed.approverId, isNull);
+      expect(failed.needsReallocation, isTrue);
+      expect(failed.pickupFailedVehicleId, w.gol.id);
+      expect(failed.pickupFailureReason, PickupFailureReason.problemaVeiculo);
+      expect(failed.pickupFailureNotes, 'Pneu furado');
+      expect(
+        await w.notificationTypes(w.bruno),
+        contains(NotificationType.pickupFailed),
+      );
+      expect(
+        (await w.notificationTypes(w.ana)).first,
+        NotificationType.reverted,
+      );
+
+      // Aparece em "Precisa de atenção".
+      final alerts = await RelatoriosRepository(w.tx).requestAlerts();
+      expect(
+        alerts.where(
+          (x) =>
+              x.kind == AlertKind.retiradaFalhou &&
+              x.title.startsWith('Ana') &&
+              x.message.contains('TST9A03'),
+        ),
+        hasLength(1),
+      );
+
+      // O gol (que falhou) não é oferecido nem aceito; outro veículo, sim.
+      final eligible = await w.service.eligibleVehicles(a.id);
+      expect(eligible.map((v) => v.id), isNot(contains(w.gol.id)));
+      await expectLater(
+        w.service.approve(w.bruno, a.id, w.gol.id),
+        _apiError(409),
+      );
+      final realloc = await w.service.approve(w.bruno, a.id, w.van.id);
+      expect(realloc.status, RequestStatus.aprovada);
+      expect(realloc.vehicleId, w.van.id);
+      // O histórico da falha continua registrado.
+      expect(realloc.pickupFailedVehicleId, w.gol.id);
+    },
+  );
+
+  scenario('falha na retirada → reagendar: cancela e libera a agenda', (
+    w,
+  ) async {
+    final a = await w.service.createRequest(w.ana, w.trip());
+    await w.service.approve(w.bruno, a.id, w.gol.id);
+    await moveTo(w, a.id, saida: tenMinutesAgo);
+
+    // "Outro" sem observação: a rota recusa antes; o banco também.
+    await expectLater(
+      w.service.reportPickupFailure(
+        w.ana,
+        a.id,
+        reason: PickupFailureReason.outro,
+        action: PickupFailureAction.reagendar,
+      ),
+      throwsA(isA<ServerException>()),
+    );
+
+    final canceled = await w.service.reportPickupFailure(
+      w.ana,
+      a.id,
+      reason: PickupFailureReason.naoDevolvido,
+      action: PickupFailureAction.reagendar,
+    );
+    expect(canceled.status, RequestStatus.cancelada);
+    expect(canceled.vehicleId, isNull);
+    expect(canceled.approverId, isNull);
+    expect(canceled.pickupFailedVehicleId, w.gol.id);
+    expect((await w.notificationTypes(w.ana)).first, NotificationType.canceled);
+    expect(
+      await w.notificationTypes(w.bruno),
+      isNot(contains(NotificationType.pickupFailed)),
+    );
+
+    // Pode pedir de novo no mesmo período (RN 4.4 liberada).
+    final again = await w.service.createRequest(w.ana, w.trip());
+    expect(again.status, RequestStatus.pendente);
+  });
+
+  scenario('reserva em risco: avisa uma vez quando o veículo está atrasado', (
+    w,
+  ) async {
+    // Caio tem o gol reservado para daqui a 2 dias.
+    final c = await w.service.createRequest(w.caio, w.trip(days: 2));
+    await w.service.approve(w.bruno, c.id, w.gol.id);
+
+    // Ana está com o gol e deveria ter devolvido há 1 hora (hoje).
+    final a = await w.service.createRequest(w.ana, w.trip(days: 5));
+    await w.service.approve(w.bruno, a.id, w.gol.id);
+    await moveTo(
+      w,
+      a.id,
+      saida: "now() - interval '5 hours'",
+      prazo: "now() - interval '1 hour'",
+      dataRetorno: "(now() AT TIME ZONE 'America/Sao_Paulo')::date",
+    );
+    await w.service.checkOut(w.ana, a.id, mileage: 3000);
+
+    expect(await w.service.alertReservationsAtRisk(), greaterThanOrEqualTo(1));
+    expect((await w.notificationTypes(w.caio)).first, NotificationType.atRisk);
+    expect(
+      await w.notificationTypes(w.bruno),
+      contains(NotificationType.atRisk),
+    );
+    final alerts = await RelatoriosRepository(w.tx).requestAlerts();
+    expect(
+      alerts.where(
+        (x) => x.kind == AlertKind.reservaEmRisco && x.message.contains('Caio'),
+      ),
+      hasLength(1),
+    );
+
+    // Segunda chamada não repete o aviso.
+    final before = (await w.notificationTypes(w.caio)).length;
+    await w.service.alertReservationsAtRisk();
+    expect(await w.notificationTypes(w.caio), hasLength(before));
+
+    // Atrasada: o gol some dos elegíveis de qualquer período.
+    final later = await w.service.createRequest(w.caio, w.trip(days: 9));
+    final eligible = await w.service.eligibleVehicles(later.id);
+    expect(eligible.map((v) => v.id), isNot(contains(w.gol.id)));
+  });
+
+  // -------------------------------------------------------------------
+  // Push no celular (fila em notificacoes.push_enviado_em)
+  // -------------------------------------------------------------------
+
+  scenario('push: envia a notificação nova uma vez; token inválido é '
+      'apagado; falha temporária volta para a fila', (w) async {
+    final devices = DispositivosRepository(w.tx);
+    await devices.register(w.ana.id, 'token-bom');
+    await devices.register(w.ana.id, 'token-velho');
+    final gateway = _FakeGateway({'token-velho': PushResult.invalidToken});
+    final push = PushDispatcher(w.tx, gateway);
+
+    // Só nas notificações deste cenário (o banco real pode ter outras).
+    bool mine(_Sent s) => s.token.startsWith('token-');
+
+    await w.service.createRequest(w.ana, w.trip());
+    await push.flush();
+    final sent = gateway.sent.where(mine).toList();
+    expect(sent.map((s) => s.token), ['token-bom', 'token-velho']);
+    expect(sent.first.title, 'Solicitação enviada');
+    expect(sent.first.body, startsWith('Macaé: '));
+    expect(sent.first.data['type'], 'sent');
+    // O token velho foi apagado; o bom continua.
+    expect((await devices.tokensOf([w.ana.id]))[w.ana.id], ['token-bom']);
+
+    // Já enviada: não sai de novo.
+    gateway.sent.clear();
+    await push.flush();
+    expect(gateway.sent.where(mine), isEmpty);
+
+    // FCM fora do ar: volta para a fila e sai na próxima tentativa.
+    gateway.results['token-bom'] = PushResult.failed;
+    final r = await w.service.createRequest(w.ana, w.trip(days: 6));
+    await push.flush();
+    final pending = await w.tx.execute(
+      Sql.named(
+        'SELECT push_enviado_em IS NULL, push_tentativas FROM notificacoes '
+        'WHERE solicitacao_id = @id',
+      ),
+      parameters: {'id': r.id},
+    );
+    expect(pending.single, [true, 1]);
+
+    gateway.results.remove('token-bom');
+    gateway.sent.clear();
+    await push.flush();
+    expect(gateway.sent.where(mine), hasLength(1));
+  });
+}
+
+class _Sent {
+  _Sent(this.token, this.title, this.body, this.data);
+  final String token;
+  final String title;
+  final String body;
+  final Map<String, String> data;
+}
+
+class _FakeGateway implements PushGateway {
+  _FakeGateway(this.results);
+
+  final Map<String, PushResult> results;
+  final sent = <_Sent>[];
+
+  @override
+  Future<PushResult> send({
+    required String token,
+    required String title,
+    required String body,
+    required Map<String, String> data,
+  }) async {
+    final result = results[token] ?? PushResult.sent;
+    if (result != PushResult.failed) sent.add(_Sent(token, title, body, data));
+    return result;
+  }
 }

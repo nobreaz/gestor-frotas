@@ -81,3 +81,19 @@ String parseRejection(Map<String, dynamic> json) {
   r.throwIfInvalid();
   return (mileage: mileage!, notes: notes);
 }
+
+/// Corpo de `POST /solicitacoes/{id}/falha_retirada`: motivo, o que o
+/// solicitante quer fazer e observação (obrigatória quando o motivo é
+/// "outro").
+({PickupFailureReason reason, PickupFailureAction action, String? notes})
+parsePickupFailure(Map<String, dynamic> json) {
+  final r = JsonReader(json);
+  final reason = r.choice('reason', PickupFailureReason.values, 'Motivo');
+  final action = r.choice('action', PickupFailureAction.values, 'Ação');
+  final notes = r.optionalText('notes');
+  if (reason != null && reason.requiresNotes && notes == null) {
+    r.errors['notes'] = 'Descreva o que aconteceu.';
+  }
+  r.throwIfInvalid();
+  return (reason: reason!, action: action!, notes: notes);
+}

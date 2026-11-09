@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dotenv/dotenv.dart';
 
 /// Configuração da API, lida das variáveis de ambiente.
@@ -11,6 +13,7 @@ class Config {
     required this.supabaseUrl,
     required this.supabasePublishableKey,
     required this.supabaseSecretKey,
+    this.firebaseServiceAccount,
   });
 
   factory Config.fromEnvironment() {
@@ -32,7 +35,23 @@ class Config {
       supabaseUrl: Uri.parse(required('SUPABASE_URL')),
       supabasePublishableKey: required('SUPABASE_PUBLISHABLE_KEY'),
       supabaseSecretKey: required('SUPABASE_SECRET_KEY'),
+      firebaseServiceAccount: _serviceAccount(env['FIREBASE_SERVICE_ACCOUNT']),
     );
+  }
+
+  /// Aceita o JSON direto (hospedagem: variável de ambiente) ou o caminho
+  /// do arquivo (desenvolvimento). Vazio = push desligado.
+  static String? _serviceAccount(String? value) {
+    final v = value?.trim();
+    if (v == null || v.isEmpty) return null;
+    if (v.startsWith('{')) return v;
+    final file = File(v);
+    if (!file.existsSync()) {
+      throw StateError(
+        'FIREBASE_SERVICE_ACCOUNT aponta para um arquivo que não existe: $v',
+      );
+    }
+    return file.readAsStringSync();
   }
 
   /// Conexão direta com o PostgreSQL do Supabase (pooler, modo session).
@@ -46,4 +65,8 @@ class Config {
 
   /// Chave secreta (`sb_secret_...`). Só no servidor: cria e bloqueia logins.
   final String supabaseSecretKey;
+
+  /// JSON da conta de serviço do Firebase (push no celular). Opcional:
+  /// sem ela a API funciona normalmente, só não envia push.
+  final String? firebaseServiceAccount;
 }

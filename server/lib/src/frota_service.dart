@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:frota_core/frota_core.dart';
 import 'package:frota_server/src/api_exception.dart';
 import 'package:frota_server/src/notificacoes_repository.dart';
@@ -5,6 +7,16 @@ import 'package:frota_server/src/request_input.dart';
 import 'package:frota_server/src/solicitacoes_repository.dart';
 import 'package:frota_server/src/veiculos_repository.dart';
 import 'package:postgres/postgres.dart';
+
+/// Roda o alerta de reservas em risco sem deixar uma falha dele derrubar a
+/// listagem que o chamou (o alerta é um "extra" das rotas de leitura).
+Future<void> alertReservationsAtRiskQuietly(FrotaService frota) async {
+  try {
+    await frota.alertReservationsAtRisk();
+  } on Object catch (e) {
+    stderr.writeln('Falha ao verificar reservas em risco: $e');
+  }
+}
 
 /// Repositórios ligados a uma mesma transação.
 class _Tx {
@@ -31,6 +43,19 @@ class _Tx {
     destination: destination,
     message: message,
   );
+
+  /// Avisa todos os Aprovadores ativos.
+  Future<void> notifyApprovers(
+    int requestId,
+    String destination,
+    NotificationType type,
+    String message,
+  ) => notifications.insertForApprovers(
+    requestId: requestId,
+    type: type,
+    destination: destination,
+    message: message,
+  );
 }
 
 /// Regras de negócio de solicitações e veículos (seção 4 do documento).
@@ -44,16 +69,22 @@ class _Tx {
 /// Quem pode chamar cada operação (perfil) é conferido nas rotas; aqui
 /// ficam as regras que dependem do estado da solicitação e do veículo.
 class FrotaService {
-  FrotaService(this._db);
+  FrotaService(this._db, {this._afterCommit});
 
   final SessionExecutor _db;
+
+  /// Chamado depois de cada transação gravada (envio de push).
+  final void Function()? _afterCommit;
 
   /// Folga para "saída no passado": o usuário pode demorar a enviar o
   /// formulário depois de escolher o horário.
   static const _pastTolerance = Duration(minutes: 10);
 
-  Future<T> _tx<T>(Future<T> Function(_Tx tx) fn) =>
-      _db.runTx((session) => fn(_Tx(session)));
+  Future<T> _tx<T>(Future<T> Function(_Tx tx) fn) async {
+    final result = await _db.runTx((session) => fn(_Tx(session)));
+    _afterCommit?.call();
+    return result;
+  }
 
   // -------------------------------------------------------------------
   // Solicitações
@@ -210,17 +241,26 @@ class FrotaService {
             'precisa de ${request.passengers}.',
           );
         }
+        if (vehicleId == request.pickupFailedVehicleId) {
+          throw const ApiException.conflict(
+            'O solicitante não conseguiu retirar este veículo. '
+            'Escolha outro.',
+          );
+        }
 
+        // Margem de um dia: o veículo fica ocupado até a meia-noite
+        // seguinte ao retorno (vehicleEnd), não só até o prazo.
         final period = await tx.requests.periodOf(id);
         final free = await tx.requests.vehicleIsFree(
           vehicleId: vehicleId,
           start: period.start,
-          end: period.end,
+          end: period.vehicleEnd,
           ignoreRequestId: id,
         );
         if (!free) {
           throw const ApiException.conflict(
-            'O veículo já está reservado neste período. Escolha outro.',
+            'O veículo já está reservado neste período (ou não cumpre a '
+            'margem de um dia após outra viagem). Escolha outro.',
           );
         }
 
@@ -230,6 +270,7 @@ class FrotaService {
           'justificativa_recusa': null,
           'aprovador_id': me.id,
           'decidido_em': DateTime.now(),
+          'alerta_risco_em': null,
         });
         await tx.notify(
           request.requesterId,
@@ -315,6 +356,112 @@ class FrotaService {
     return (await tx.requests.findById(id))!;
   });
 
+  /// O solicitante não conseguiu retirar o veículo alocado (pedido do
+  /// professor, 2026-11-09). Só em solicitação aprovada e a partir do dia
+  /// da saída. Registra motivo, observação e o veículo, e:
+  /// - [PickupFailureAction.novoVeiculo]: volta a Pendente (sem veículo e
+  ///   sem decisão) e todos os Aprovadores são avisados na hora;
+  /// - [PickupFailureAction.reagendar]: a solicitação é cancelada (o app
+  ///   leva o solicitante para uma nova, já preenchida).
+  Future<RequestModel> reportPickupFailure(
+    UserModel me,
+    int id, {
+    required PickupFailureReason reason,
+    required PickupFailureAction action,
+    String? notes,
+  }) => _tx((tx) async {
+    final request = await _ownRequest(tx, me, id);
+    if (request.status != RequestStatus.aprovada) {
+      throw const ApiException.conflict(
+        'Só é possível informar problema na retirada de uma solicitação '
+        'aprovada.',
+      );
+    }
+    if (!await tx.requests.departureDayReached(id)) {
+      throw const ApiException.conflict(
+        'O problema na retirada só pode ser informado a partir do dia '
+        'da saída. Antes disso, edite ou cancele a solicitação.',
+      );
+    }
+
+    final vehicle = (await tx.vehicles.findById(request.vehicleId!))!;
+    final vehicleName = '${vehicle.model} · ${vehicle.plate}';
+    final failure = <String, Object?>{
+      'falha_retirada_em': DateTime.now(),
+      'falha_retirada_motivo': reason,
+      'falha_retirada_obs': notes,
+      'falha_retirada_veiculo_id': vehicle.id,
+    };
+    final why = notes == null ? reason.label : '${reason.label}: $notes';
+
+    switch (action) {
+      case PickupFailureAction.novoVeiculo:
+        await tx.requests.update(id, {
+          ...failure,
+          ..._backToPending,
+        });
+        await tx.notifyApprovers(
+          id,
+          request.destination,
+          NotificationType.pickupFailed,
+          '${request.requester} não conseguiu retirar o $vehicleName '
+          '($why). Aloque outro veículo com urgência.',
+        );
+        await tx.notify(
+          me.id,
+          id,
+          request.destination,
+          NotificationType.reverted,
+          'Os Aprovadores foram avisados e vão alocar outro veículo.',
+        );
+      case PickupFailureAction.reagendar:
+        await tx.requests.update(id, {
+          ...failure,
+          ..._backToPending,
+          'status': RequestStatus.cancelada,
+        });
+        await tx.notify(
+          me.id,
+          id,
+          request.destination,
+          NotificationType.canceled,
+          'Solicitação encerrada para reagendamento ($why).',
+        );
+    }
+    return (await tx.requests.findById(id))!;
+  });
+
+  /// Reservas em risco: avisa o solicitante e os Aprovadores quando o
+  /// veículo de uma reserva aprovada que sai em até 72 h ainda está numa
+  /// viagem com a devolução atrasada. Cada reserva é avisada uma vez só.
+  ///
+  /// Não há tarefa agendada: é chamado quando o app busca notificações ou
+  /// solicitações (o app faz isso ao abrir e ao "puxar para atualizar").
+  /// Devolve quantas reservas foram marcadas.
+  Future<int> alertReservationsAtRisk() => _tx((tx) async {
+    final atRisk = await tx.requests.markAtRisk();
+    for (final r in atRisk) {
+      final when = r.departure;
+      await tx.notify(
+        r.requesterId,
+        r.id,
+        r.destination,
+        NotificationType.atRisk,
+        'O ${r.vehicle} ainda não voltou da viagem anterior. Sua saída '
+        '($when) pode ser afetada; se não conseguir retirar, use "Não '
+        'consegui retirar".',
+      );
+      await tx.notifyApprovers(
+        r.id,
+        r.destination,
+        NotificationType.atRisk,
+        'O ${r.vehicle} está com a devolução atrasada e tem reserva com '
+        'saída em $when. Considere trocar o veículo.',
+      );
+    }
+    return atRisk.length;
+  });
+
   /// Devolução do veículo (check-in, RF 3.3.6). A km de retorno não pode ser
   /// menor que a de saída (RN 4.8); o veículo volta a Disponível com ela.
   Future<RequestModel> checkIn(
@@ -364,8 +511,9 @@ class FrotaService {
     return tx.vehicles.eligible(
       passengers: request.passengers,
       start: period.start,
-      end: period.end,
+      end: period.vehicleEnd,
       ignoreRequestId: id,
+      excludeVehicleId: request.pickupFailedVehicleId,
     );
   });
 
@@ -448,6 +596,7 @@ class FrotaService {
     'veiculo_id': null,
     'aprovador_id': null,
     'decidido_em': null,
+    'alerta_risco_em': null,
   };
 
   /// A solicitação, travada, desde que seja de [me].

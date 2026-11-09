@@ -6,6 +6,7 @@ import 'package:test/test.dart';
 
 import '../../routes/solicitacoes/[id]/aprovar.dart' as aprovar;
 import '../../routes/solicitacoes/[id]/devolucao.dart' as devolucao;
+import '../../routes/solicitacoes/[id]/falha_retirada.dart' as falha;
 import '../../routes/solicitacoes/[id]/index.dart' as detalhe;
 import '../../routes/solicitacoes/[id]/recusar.dart' as recusar;
 import '../../routes/solicitacoes/[id]/veiculos.dart' as elegiveis;
@@ -282,5 +283,74 @@ void main() {
       ),
       _apiError(403),
     );
+  });
+
+  group('POST /solicitacoes/{id}/falha_retirada', () {
+    Future<dynamic> post(Map<String, Object?> body, {UserModel? me}) =>
+        falha.onRequest(
+          contextFor(
+            jsonRequest('POST', '/solicitacoes/1/falha_retirada', body),
+            me: me ?? ana,
+            frota: frota,
+          ),
+          '1',
+        );
+
+    test('novo veículo: repassa motivo, ação e observação', () async {
+      when(
+        () => frota.reportPickupFailure(
+          ana,
+          1,
+          reason: PickupFailureReason.problemaVeiculo,
+          action: PickupFailureAction.novoVeiculo,
+          notes: 'Pneu furado',
+        ),
+      ).thenAnswer((_) async => request());
+
+      await post({
+        'reason': 'problemaVeiculo',
+        'action': 'novoVeiculo',
+        'notes': ' Pneu furado ',
+      });
+      verify(
+        () => frota.reportPickupFailure(
+          ana,
+          1,
+          reason: PickupFailureReason.problemaVeiculo,
+          action: PickupFailureAction.novoVeiculo,
+          notes: 'Pneu furado',
+        ),
+      ).called(1);
+    });
+
+    test('motivo "outro" sem observação → 400', () {
+      expect(
+        () => post({'reason': 'outro', 'action': 'reagendar'}),
+        _apiError(400),
+      );
+    });
+
+    test('motivo ou ação desconhecidos → 400', () {
+      expect(
+        () => post({'reason': 'sei-la', 'action': 'reagendar'}),
+        _apiError(400),
+      );
+      expect(
+        () => post({'reason': 'naoDevolvido', 'action': 'desistir'}),
+        _apiError(400),
+      );
+    });
+
+    test('aprovador e administrador não usam → 403', () {
+      for (final me in [approver, admin]) {
+        expect(
+          () => post({
+            'reason': 'naoDevolvido',
+            'action': 'novoVeiculo',
+          }, me: me),
+          _apiError(403),
+        );
+      }
+    });
   });
 }

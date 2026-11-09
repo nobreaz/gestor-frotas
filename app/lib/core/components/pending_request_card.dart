@@ -94,6 +94,11 @@ class PendingRequestCard extends StatelessWidget {
           ),
           const Divider(height: 22),
 
+          if (request.needsReallocation) ...[
+            _urgentBanner(),
+            const SizedBox(height: 12),
+          ],
+
           Text(
             'Viagem a ${request.destination}',
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
@@ -156,6 +161,63 @@ class PendingRequestCard extends StatelessWidget {
     );
   }
 
+  /// Retirada falhou: o solicitante está esperando outro veículo.
+  Widget _urgentBanner() {
+    final reason = request.pickupFailureReason;
+    final notes = request.pickupFailureNotes;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.rejected.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.rejected.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.car_crash_outlined,
+            size: 18,
+            color: AppColors.rejected,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'URGENTE · Retirada não realizada',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.rejected,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  [
+                    ?reason?.label,
+                    ?notes,
+                  ].join(' · ').ifEmpty('Motivo não informado'),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'Aloque outro veículo (o anterior não aparece na lista).',
+                  style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _detail(String label, String value) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -180,4 +242,8 @@ class PendingRequestCard extends StatelessWidget {
       ],
     );
   }
+}
+
+extension on String {
+  String ifEmpty(String fallback) => isEmpty ? fallback : this;
 }

@@ -40,9 +40,14 @@ class RequestController extends ChangeNotifier with Loadable {
   }
 
   /// Apenas as solicitações aguardando decisão do aprovador.
-  List<RequestModel> get pendingRequests => List.unmodifiable(
-    _requests.where((r) => r.status == RequestStatus.pendente),
-  );
+  /// As urgentes (retirada falhou, precisa de outro veículo) vêm primeiro.
+  List<RequestModel> get pendingRequests {
+    final pending = _requests.where((r) => r.status == RequestStatus.pendente);
+    return List.unmodifiable([
+      ...pending.where((r) => r.needsReallocation),
+      ...pending.where((r) => !r.needsReallocation),
+    ]);
+  }
 
   /// Já aprovadas (aprovada, em uso ou finalizada) ou recusadas, por
   /// qualquer aprovador; mais recentes decisões primeiro.
@@ -210,6 +215,23 @@ class RequestController extends ChangeNotifier with Loadable {
     );
     await VehicleController.instance.load();
   }
+
+  /// O solicitante não conseguiu retirar o veículo (motivo + observação).
+  /// - [PickupFailureAction.novoVeiculo]: volta a Pendente e os Aprovadores
+  ///   são avisados para alocar outro veículo;
+  /// - [PickupFailureAction.reagendar]: a solicitação é cancelada.
+  Future<RequestModel> reportPickupFailure(
+    int id, {
+    required PickupFailureReason reason,
+    required PickupFailureAction action,
+    String? notes,
+  }) async => _store(
+    await _api.post('/solicitacoes/$id/falha_retirada', {
+      'reason': reason.name,
+      'action': action.name,
+      'notes': notes,
+    }),
+  );
 
   /// Intervalo de tempo que uma solicitação ocupa na agenda.
   /// Em uso e com devolução atrasada: continua ocupando até o check-in.

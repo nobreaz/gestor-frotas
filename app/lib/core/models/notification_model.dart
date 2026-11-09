@@ -20,6 +20,10 @@ extension NotificationTypeUi on NotificationType {
         return AppColors.textMuted;
       case NotificationType.reverted:
         return AppColors.canceled;
+      case NotificationType.pickupFailed:
+        return AppColors.rejected;
+      case NotificationType.atRisk:
+        return AppColors.canceled;
     }
   }
 
@@ -35,6 +39,10 @@ extension NotificationTypeUi on NotificationType {
         return Icons.block;
       case NotificationType.reverted:
         return Icons.replay;
+      case NotificationType.pickupFailed:
+        return Icons.car_crash_outlined;
+      case NotificationType.atRisk:
+        return Icons.warning_amber_rounded;
     }
   }
 }

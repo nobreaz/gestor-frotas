@@ -10,6 +10,10 @@ export 'package:frota_core/frota_core.dart'
         ReturnPeriod,
         ReturnPeriodX,
         periodsOverlap,
+        vehicleFreeFrom,
+        PickupFailureAction,
+        PickupFailureReason,
+        PickupFailureReasonX,
         RequestModel;
 
 /// Cor de cada status (só existe no app).

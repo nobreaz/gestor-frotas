@@ -36,6 +36,32 @@ class NotificacoesRepository {
     );
   }
 
+  /// A mesma notificação para todos os Aprovadores ativos (o "time de
+  /// aprovação"). Devolve quantos foram avisados.
+  Future<int> insertForApprovers({
+    required int requestId,
+    required NotificationType type,
+    required String destination,
+    required String message,
+  }) async {
+    final result = await _db.execute(
+      Sql.named('''
+        INSERT INTO notificacoes (
+          usuario_id, solicitacao_id, tipo, destino, mensagem
+        )
+        SELECT id, @request, @type::tipo_notificacao, @destination, @message
+        FROM usuarios
+        WHERE perfil = 'aprovador' AND ativo'''),
+      parameters: {
+        'request': requestId,
+        'type': type.name,
+        'destination': destination,
+        'message': message,
+      },
+    );
+    return result.affectedRows;
+  }
+
   /// Notificações do usuário, mais recentes primeiro (no máximo [limit]).
   Future<List<AppNotification>> listFor(int userId, {int limit = 100}) async {
     final result = await _db.execute(

@@ -16,7 +16,11 @@ class NewRequestPage extends StatefulWidget {
   /// Quando informado, a tela funciona em modo de edição.
   final RequestModel? request;
 
-  const NewRequestPage({super.key, this.request});
+  /// Reagendamento: nova solicitação com motivo, destino e passageiros
+  /// copiados desta (a original foi encerrada); só as datas ficam vazias.
+  final RequestModel? copyFrom;
+
+  const NewRequestPage({super.key, this.request, this.copyFrom});
 
   @override
   State<NewRequestPage> createState() => _NewRequestPageState();
@@ -46,6 +50,12 @@ class _NewRequestPageState extends State<NewRequestPage> {
       departureDateTime = r.departure;
       returnDate = r.returnDate;
       returnPeriod = r.returnPeriod;
+    }
+    final copy = widget.copyFrom;
+    if (r == null && copy != null) {
+      reasonTravel = copy.reason;
+      destination = copy.destination;
+      numberPassengers = copy.passengers;
     }
   }
 
@@ -268,6 +278,33 @@ class _NewRequestPageState extends State<NewRequestPage> {
     return confirmed == true;
   }
 
+  /// Aviso no topo quando a tela abre para reagendar uma viagem.
+  Widget _rescheduleNotice(RequestModel original) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.canceled.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.event_repeat, size: 20, color: AppColors.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Reagendando a viagem a ${original.destination} '
+              '(solicitação #${original.id}, encerrada). Os dados foram '
+              'copiados: escolha as novas datas.',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = UserController.instance.currentUser;
@@ -296,6 +333,10 @@ class _NewRequestPageState extends State<NewRequestPage> {
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         const SizedBox(height: 20),
+                        if (widget.copyFrom != null) ...[
+                          _rescheduleNotice(widget.copyFrom!),
+                          const SizedBox(height: 16),
+                        ],
                         if (user.profile.canRequest && !user.hasValidCnh) ...[
                           _cnhBlockedWarning(user),
                           const SizedBox(height: 10),

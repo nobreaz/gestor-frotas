@@ -5,6 +5,7 @@ import 'package:project/core/controllers/request_controller.dart';
 import 'package:project/core/controllers/vehicle_controller.dart';
 import 'package:project/core/models/user_model.dart';
 import 'package:project/core/services/api_client.dart';
+import 'package:project/core/services/push_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Login e usuários.
@@ -23,6 +24,12 @@ class UserController extends ChangeNotifier {
   ApiClient get _api => ApiClient.instance;
 
   UserModel? _currentUser;
+
+  /// Último usuário logado. Ao sair, as telas internas ainda ficam montadas
+  /// até a navegação para o login terminar e se redesenham com os dados
+  /// limpos; sem isso, [currentUser] lançaria no meio do build.
+  UserModel? _lastUser;
+
   List<UserModel> _users = [];
 
   /// Estado da lista da Gestão de Usuários.
@@ -33,7 +40,9 @@ class UserController extends ChangeNotifier {
 
   /// Usuário logado. As telas internas só abrem depois do login.
   UserModel get currentUser =>
-      _currentUser ?? (throw StateError('Nenhum usuário logado.'));
+      _currentUser ??
+      _lastUser ??
+      (throw StateError('Nenhum usuário logado.'));
 
   /// Usuários carregados por [loadUsers] (só Aprovador).
   List<UserModel> get users => List.unmodifiable(_users);
@@ -79,11 +88,14 @@ class UserController extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    // Antes de apagar a sessão: a API precisa do login para remover o token.
+    await PushService.unregister();
     try {
       await _auth.signOut();
     } on AuthException {
       // Sem rede: a sessão local é apagada mesmo assim.
     }
+    _lastUser = _currentUser ?? _lastUser;
     _currentUser = null;
     _users = [];
     VehicleController.instance.clear();
@@ -97,6 +109,7 @@ class UserController extends ChangeNotifier {
     _currentUser = UserModel.fromJson(await _api.get('/me'));
     notifyListeners();
     refreshAppData();
+    PushService.register(); // sem esperar: não atrasa a entrada no app
   }
 
   /// Recarrega frota, solicitações e notificações (sem bloquear a tela:
