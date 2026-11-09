@@ -17,3 +17,6 @@ oracleJdk-27/
 # Chave da conta de serviço do Firebase (push): SECRETA, nunca no Git.
 *firebase-adminsdk*.json
 server/secrets/
+
+# Deploy: segredos enviados à VPS
+deploy/secrets/

@@ -1,0 +1,4 @@
+# Arquivos que rodam na VPS (Linux): sempre LF, mesmo saindo do Windows.
+*.sh     text eol=lf
+*.caddy  text eol=lf
+*.yml    text eol=lf

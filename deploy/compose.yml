@@ -1,0 +1,29 @@
+# Produção da API do App Frotas na VPS da Hostinger (a mesma do CRM).
+# O banco e o login ficam no Supabase; aqui roda só a API (executável nativo).
+# Não expõe porta: o Caddy do CRM recebe o HTTPS e encaminha para
+# "frotas-api:8080" pela rede compartilhada "caddy-sites" (ver frotas.caddy).
+# Os valores vêm de deploy/.env e deploy/secrets/ (fora do Git, enviados
+# pelo publicar.ps1 na primeira vez ou com -Configurar).
+name: frotas
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: frotas-api
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./secrets:/secrets:ro
+    networks:
+      sites:
+        aliases: [frotas-api]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+networks:
+  sites:
+    name: caddy-sites
+    external: true
