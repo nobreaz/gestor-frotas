@@ -25,8 +25,13 @@ class AppLogo extends StatelessWidget {
           width: width,
           height: height,
           decoration: ShapeDecoration(
-            image: DecorationImage(image: AssetImage(assetPath), fit: BoxFit.fill),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17)),
+            image: DecorationImage(
+              image: AssetImage(assetPath),
+              fit: BoxFit.fill,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(17),
+            ),
           ),
         ),
       ),

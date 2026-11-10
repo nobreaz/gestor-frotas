@@ -1,6 +1,32 @@
 import 'package:frota_core/frota_core.dart';
 import 'package:frota_server/src/json_reader.dart';
 
+/// Formato dos campos de texto do cadastro (vale no POST e no PATCH).
+void _checkFormats(JsonReader r) {
+  String? text(String key) {
+    final value = r.json[key];
+    return value is String ? value.trim() : null;
+  }
+
+  const letters = 'Use apenas letras.';
+  r
+    ..format('name', text('name'), isOnlyLetters, letters)
+    ..format('role', text('role'), isOnlyLetters, letters)
+    ..format('department', text('department'), isOnlyLetters, letters)
+    ..format(
+      'phone',
+      text('phone'),
+      isValidPhone,
+      'Telefone inválido. Use (22) 99999-0000 ou o ramal.',
+    )
+    ..format(
+      'cnhNumber',
+      text('cnhNumber'),
+      isValidCnhNumber,
+      'A CNH tem 11 números.',
+    );
+}
+
 /// Corpo de `POST /usuarios`: o Administrador cadastra um colaborador
 /// com uma senha inicial (RF 3.1.3; senha segue a RNF 6.2).
 class NewUserInput {
@@ -36,6 +62,7 @@ class NewUserInput {
           : UserProfile.padrao,
     );
 
+    _checkFormats(r);
     r.throwIfInvalid();
     return NewUserInput._(user, password as String);
   }
@@ -67,6 +94,7 @@ Map<String, Object?> parseUserUpdate(Map<String, dynamic> json) {
   if (r.has('profile')) changes['perfil'] = r.profile('profile')?.name;
   if (r.has('active')) changes['ativo'] = r.boolean('active');
 
+  _checkFormats(r);
   r.throwIfInvalid();
   return changes;
 }
@@ -79,6 +107,7 @@ Map<String, Object?> parseMeUpdate(Map<String, dynamic> json) {
     r.errors[key] = 'Só o telefone pode ser alterado pelo próprio usuário.';
   }
   final changes = {if (r.has('phone')) 'telefone': r.optionalText('phone')};
+  _checkFormats(r);
   r.throwIfInvalid();
   return changes;
 }

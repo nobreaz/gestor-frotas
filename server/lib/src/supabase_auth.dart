@@ -105,7 +105,7 @@ class SupabaseAuth {
     _ensureSuccess(response, banned ? 'bloquear o login' : 'liberar o login');
   }
 
-  /// Apaga um login. Usado só para desfazer um cadastro que falhou no meio.
+  /// Apaga um login (exclusão de usuário ou cadastro que falhou no meio).
   Future<void> deleteUser(String authId) async {
     final response = await _client.delete(
       _endpoint('admin/users/$authId'),

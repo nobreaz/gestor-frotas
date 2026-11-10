@@ -9,6 +9,7 @@ import 'package:project/core/models/vehicle_model.dart';
 import 'package:project/core/services/api_client.dart';
 import 'package:project/core/services/feedback.dart';
 import 'package:project/core/theme/app_colors.dart';
+import 'package:project/core/utils/input_formatters.dart';
 import 'package:project/pages/new_request_page.dart';
 
 class MyRequestsPage extends StatelessWidget {
@@ -58,6 +59,7 @@ class MyRequestsPage extends StatelessWidget {
                 TextField(
                   controller: mileageController,
                   keyboardType: TextInputType.number,
+                  inputFormatters: AppFormatters.digits(7),
                   autofocus: true,
                   decoration: InputDecoration(
                     labelText: 'Quilometragem',
@@ -73,6 +75,8 @@ class MyRequestsPage extends StatelessWidget {
                 TextField(
                   controller: notesController,
                   maxLines: 3,
+                  inputFormatters: AppFormatters.freeText(),
+                  textCapitalization: TextCapitalization.sentences,
                   decoration: InputDecoration(
                     labelText: 'Observações (opcional)',
                     hintText: 'Ex.: nível de combustível, avarias...',
@@ -100,8 +104,7 @@ class MyRequestsPage extends StatelessWidget {
                 if (minimum != null && value < minimum) {
                   setDialogState(
                     () => errorText =
-                        minimumMessage ??
-                        'O valor deve ser maior ou igual a $minimum km.',
+                        minimumMessage ?? 'Informe no mínimo $minimum km.',
                   );
                   return;
                 }
@@ -125,13 +128,12 @@ class MyRequestsPage extends StatelessWidget {
       context,
       title: 'Retirada do veículo',
       description: vehicle == null
-          ? 'Informe a quilometragem atual do painel.'
-          : 'Informe a quilometragem atual do painel do '
+          ? 'Informe a quilometragem do painel.'
+          : 'Informe a quilometragem do painel do '
                 '${vehicle.model} (${vehicle.plate}).',
       minimum: minimum,
       minimumMessage:
-          'A km de saída não pode ser menor que a '
-          'quilometragem atual do veículo ($minimum km).',
+          'Não pode ser menor que a km atual do veículo ($minimum km).',
     );
     if (result == null) return;
 
@@ -143,7 +145,7 @@ class MyRequestsPage extends StatelessWidget {
         notes: result.notes,
       );
       if (context.mounted) {
-        showSnack(context, 'Check-out registrado. Boa viagem!');
+        showSnack(context, 'Retirada registrada.');
       }
     } on ApiError catch (e) {
       if (!context.mounted) return;
@@ -193,7 +195,7 @@ class MyRequestsPage extends StatelessWidget {
         notes: failure.notes,
       ),
       success: action == PickupFailureAction.novoVeiculo
-          ? 'Os Aprovadores foram avisados e vão alocar outro veículo.'
+          ? 'Pedido de outro veículo enviado.'
           : 'Solicitação encerrada. Escolha as novas datas.',
     );
     if (!ok || !context.mounted) return;
@@ -269,6 +271,8 @@ class MyRequestsPage extends StatelessWidget {
                 TextField(
                   controller: notesController,
                   maxLines: 3,
+                  inputFormatters: AppFormatters.freeText(),
+                  textCapitalization: TextCapitalization.sentences,
                   decoration: InputDecoration(
                     labelText: reason?.requiresNotes ?? false
                         ? 'Descreva o que aconteceu'
@@ -343,18 +347,14 @@ class MyRequestsPage extends StatelessWidget {
               action: PickupFailureAction.novoVeiculo,
               icon: Icons.swap_horiz,
               title: 'Solicitar outro veículo',
-              subtitle:
-                  'Mantém as datas. Os Aprovadores são avisados na hora '
-                  'para trocar o veículo desta solicitação.',
+              subtitle: 'Mantém as datas e pede outro veículo.',
             ),
             option(
               dialogContext,
               action: PickupFailureAction.reagendar,
               icon: Icons.event_repeat,
               title: 'Reagendar a viagem',
-              subtitle:
-                  'Esta solicitação é encerrada e você abre uma nova, já '
-                  'preenchida, escolhendo outras datas.',
+              subtitle: 'Encerra esta solicitação e abre uma nova.',
             ),
           ],
         ),
@@ -374,13 +374,9 @@ class MyRequestsPage extends StatelessWidget {
     final result = await _askMileage(
       context,
       title: 'Devolução do veículo',
-      description:
-          'Informe a quilometragem do painel no momento '
-          'da devolução. A km do veículo será atualizada.',
+      description: 'Informe a quilometragem do painel.',
       minimum: minimum,
-      minimumMessage:
-          'A km de retorno não pode ser menor que a '
-          'km de saída ($minimum km).',
+      minimumMessage: 'Não pode ser menor que a km de saída ($minimum km).',
     );
     if (result == null) return;
 
@@ -392,7 +388,7 @@ class MyRequestsPage extends StatelessWidget {
         result.mileage,
         notes: result.notes,
       ),
-      success: 'Devolução registrada. Solicitação finalizada.',
+      success: 'Devolução registrada.',
     );
   }
 

@@ -26,14 +26,14 @@ class VehiclesPage extends StatelessWidget {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  /// Requisito 3.2.4: o veículo é desativado, nunca apagado,
-  /// para manter o histórico das solicitações que o usaram.
+  /// Requisito 3.2.4: desativar tira o veículo da frota e mantém o
+  /// histórico das solicitações que o usaram.
   Future<void> _toggleActive(BuildContext context, VehicleModel vehicle) async {
     if (vehicle.status == VehicleStatus.inativo) {
       await runWithFeedback(
         context,
         () => VehicleController.instance.reactivateVehicle(vehicle.id),
-        success: 'Veículo reativado e disponível na frota.',
+        success: 'Veículo reativado.',
       );
       return;
     }
@@ -44,8 +44,7 @@ class VehiclesPage extends StatelessWidget {
     if (bookings.any((r) => r.status == RequestStatus.emUso)) {
       _showMessage(
         context,
-        'O veículo está em uso. Registre a devolução (check-in) '
-        'antes de desativá-lo.',
+        'O veículo está em uso. Registre a devolução primeiro.',
       );
       return;
     }
@@ -59,12 +58,10 @@ class VehiclesPage extends StatelessWidget {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Desativar veículo'),
         content: Text(
-          'O veículo ${vehicle.model} (${vehicle.plate}) deixará de aparecer '
-          'para novos agendamentos. O histórico de uso é mantido e você pode '
-          'reativá-lo depois.'
+          'Tem certeza de que deseja desativar o veículo ${vehicle.model} '
+          '(${vehicle.plate})? Esta ação poderá ser desfeita.'
           '${approved.isEmpty ? '' : '\n\n${approved.length} reserva(s) '
-                    'aprovada(s) voltarão para "Pendente" e precisarão '
-                    'de outro veículo.'}',
+                    'voltarão para aprovação.'}',
         ),
         actions: [
           TextButton(
@@ -100,6 +97,41 @@ class VehiclesPage extends StatelessWidget {
           ? 'Veículo desativado.'
           : 'Veículo desativado. $released reserva(s) voltaram para '
                 'aprovação.',
+    );
+  }
+
+  /// Exclusão definitiva: a API só deixa se o veículo nunca foi usado em
+  /// uma solicitação (com histórico, o caminho é desativar).
+  Future<void> _delete(BuildContext context, VehicleModel vehicle) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Excluir veículo'),
+        content: Text(
+          'Tem certeza de que deseja excluir o veículo ${vehicle.model} '
+          '(${vehicle.plate})? Esta ação não poderá ser desfeita.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Excluir',
+              style: TextStyle(color: AppColors.rejected),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    await runWithFeedback(
+      context,
+      () => VehicleController.instance.deleteVehicle(vehicle.id),
+      success: 'Veículo excluído.',
     );
   }
 
@@ -169,6 +201,7 @@ class VehiclesPage extends StatelessWidget {
                     onToggleActive: canEdit
                         ? () => _toggleActive(context, vehicle)
                         : null,
+                    onDelete: canEdit ? () => _delete(context, vehicle) : null,
                   );
                 },
               ),

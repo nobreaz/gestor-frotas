@@ -5,7 +5,7 @@ import 'package:test/test.dart';
 void main() {
   final body = {
     'plate': 'ABC1D23',
-    'chassis': '9BW',
+    'chassis': '9BWZZZ377VT004251',
     'model': 'Gol',
     'color': 'Branco',
     'year': 2022,
@@ -21,6 +21,35 @@ void main() {
       parseNewVehicle({...body, 'nextServiceMileage': 10000})
           .nextServiceMileage,
       10000,
+    );
+  });
+
+  test('placa: ABC-1234 ou Mercosul, gravada com hífen', () {
+    expect(parseNewVehicle({...body, 'plate': 'abc1234'}).plate, 'ABC-1234');
+    expect(parseVehicleUpdate({'plate': 'abc-1d23'}), {'placa': 'ABC-1D23'});
+    for (final bad in ['AB1234', 'ABCD123', 'ABC12345', '1BC1234']) {
+      expect(
+        () => parseVehicleUpdate({'plate': bad}),
+        throwsA(
+          isA<ApiException>().having((e) => e.fields?.keys, 'campos', [
+            'plate',
+          ]),
+        ),
+        reason: bad,
+      );
+    }
+  });
+
+  test('chassi com 17 caracteres e cor só com letras', () {
+    expect(
+      () => parseNewVehicle({...body, 'chassis': '9BW123', 'color': 'Azul 2'}),
+      throwsA(
+        isA<ApiException>().having(
+          (e) => e.fields?.keys.toSet(),
+          'campos',
+          {'chassis', 'color'},
+        ),
+      ),
     );
   });
 

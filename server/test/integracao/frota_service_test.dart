@@ -388,6 +388,33 @@ void main() {
     expect(all.every((n) => n.read), isTrue);
   });
 
+  scenario('excluir: só veículo e usuário sem histórico', (w) async {
+    // Com solicitação: não pode.
+    final request = await w.service.createRequest(w.ana, w.trip());
+    await w.service.approve(w.bruno, request.id, w.gol.id);
+    expect(await w.vehicles.hasHistory(w.gol.id), isTrue);
+    expect(await w.users.hasHistory(w.ana.id), isTrue);
+    expect(await w.users.hasHistory(w.bruno.id), isTrue); // aprovou
+
+    // Sem solicitação: exclui (o usuário leva notificações e aparelhos).
+    expect(await w.vehicles.hasHistory(w.uno.id), isFalse);
+    expect(await w.vehicles.delete(w.uno.id), isTrue);
+    expect(await w.vehicles.findById(w.uno.id), isNull);
+    expect(await w.vehicles.delete(w.uno.id), isFalse);
+
+    await DispositivosRepository(w.tx).register(w.caio.id, 'tok-caio');
+    await w.notifications.insert(
+      userId: w.caio.id,
+      requestId: request.id,
+      type: NotificationType.reverted,
+      destination: 'Macaé',
+      message: 'Teste',
+    );
+    expect(await w.users.hasHistory(w.caio.id), isFalse);
+    await w.users.delete(w.caio.id);
+    expect(await w.users.findById(w.caio.id), isNull);
+  });
+
   scenario('placa repetida vira erro de unicidade', (w) async {
     await expectLater(
       w.service.createVehicle(

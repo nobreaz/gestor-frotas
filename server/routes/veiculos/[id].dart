@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dart_frog/dart_frog.dart';
 import 'package:frota_core/frota_core.dart';
 import 'package:frota_server/src/api_exception.dart';
@@ -9,8 +11,10 @@ import 'package:frota_server/src/veiculos_repository.dart';
 /// `/veiculos/{id}`
 /// - GET: detalhe (qualquer usuário logado).
 /// - PATCH: altera dados ou status (só Administrador, RF 3.2.3 e 3.2.4).
-///   Veículo nunca é apagado: desativar = `{"status": "inativo"}`,
+///   Desativar = `{"status": "inativo"}`;
 ///   reativar = `{"status": "disponivel"}`.
+/// - DELETE: exclui (só Administrador), desde que o veículo nunca tenha sido
+///   usado em uma solicitação. Com histórico, o caminho é desativar.
 ///
 ///   A resposta traz o veículo e `releasedRequestIds`: as reservas aprovadas
 ///   que voltaram para Pendente porque o veículo deixou de atendê-las.
@@ -45,6 +49,22 @@ Future<Response> onRequest(RequestContext context, String id) async {
           'releasedRequestIds': result.releasedRequestIds,
         },
       );
+
+    case HttpMethod.delete:
+      checkProfile(context.read<UserModel>(), {
+        UserProfile.administrador,
+      }, 'excluir veículos');
+      final repository = context.read<VeiculosRepository>();
+      if (await repository.hasHistory(vehicleId)) {
+        throw const ApiException.conflict(
+          'Este veículo tem solicitações registradas e não pode ser '
+          'excluído. Desative-o.',
+        );
+      }
+      if (!await repository.delete(vehicleId)) {
+        throw const ApiException.notFound('Veículo não encontrado.');
+      }
+      return Response(statusCode: HttpStatus.noContent);
 
     // ignore: no_default_cases
     default:

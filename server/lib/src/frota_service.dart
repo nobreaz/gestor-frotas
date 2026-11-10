@@ -189,8 +189,7 @@ class FrotaService {
         id,
         f.destination ?? current.destination,
         NotificationType.reverted,
-        'Você alterou datas, período ou passageiros. A solicitação '
-        'aguarda nova aprovação.',
+        'Solicitação alterada. Aguardando nova aprovação.',
       );
     }
     return (await tx.requests.findById(id))!;
@@ -259,8 +258,7 @@ class FrotaService {
         );
         if (!free) {
           throw const ApiException.conflict(
-            'O veículo já está reservado neste período (ou não cumpre a '
-            'margem de um dia após outra viagem). Escolha outro.',
+            'O veículo já está reservado neste período. Escolha outro.',
           );
         }
 
@@ -277,8 +275,7 @@ class FrotaService {
           id,
           request.destination,
           NotificationType.approved,
-          'Veículo alocado: ${vehicle.model} · ${vehicle.plate}. '
-          'Registre o check-out na retirada.',
+          'Veículo alocado: ${vehicle.model} · ${vehicle.plate}.',
         );
         return (await tx.requests.findById(id))!;
       });
@@ -373,14 +370,12 @@ class FrotaService {
     final request = await _ownRequest(tx, me, id);
     if (request.status != RequestStatus.aprovada) {
       throw const ApiException.conflict(
-        'Só é possível informar problema na retirada de uma solicitação '
-        'aprovada.',
+        'Só é possível informar problema em solicitação aprovada.',
       );
     }
     if (!await tx.requests.departureDayReached(id)) {
       throw const ApiException.conflict(
-        'O problema na retirada só pode ser informado a partir do dia '
-        'da saída. Antes disso, edite ou cancele a solicitação.',
+        'O problema só pode ser informado a partir do dia da saída.',
       );
     }
 
@@ -405,14 +400,14 @@ class FrotaService {
           request.destination,
           NotificationType.pickupFailed,
           '${request.requester} não conseguiu retirar o $vehicleName '
-          '($why). Aloque outro veículo com urgência.',
+          '($why). Aloque outro veículo.',
         );
         await tx.notify(
           me.id,
           id,
           request.destination,
           NotificationType.reverted,
-          'Os Aprovadores foram avisados e vão alocar outro veículo.',
+          'Pedido de outro veículo enviado aos Aprovadores.',
         );
       case PickupFailureAction.reagendar:
         await tx.requests.update(id, {
@@ -448,15 +443,14 @@ class FrotaService {
         r.destination,
         NotificationType.atRisk,
         'O ${r.vehicle} ainda não voltou da viagem anterior. Sua saída '
-        '($when) pode ser afetada; se não conseguir retirar, use "Não '
-        'consegui retirar".',
+        '($when) pode ser afetada.',
       );
       await tx.notifyApprovers(
         r.id,
         r.destination,
         NotificationType.atRisk,
         'O ${r.vehicle} está com a devolução atrasada e tem reserva com '
-        'saída em $when. Considere trocar o veículo.',
+        'saída em $when.',
       );
     }
     return atRisk.length;
@@ -550,8 +544,7 @@ class FrotaService {
         status != null &&
         status != VehicleStatus.emUso) {
       throw const ApiException.conflict(
-        'O veículo está em uso. Registre a devolução (check-in) '
-        'antes de mudar o status.',
+        'O veículo está em uso. Registre a devolução primeiro.',
       );
     }
 
@@ -574,8 +567,8 @@ class FrotaService {
         r.destination,
         NotificationType.reverted,
         becomesUnavailable
-            ? 'O veículo alocado ficou indisponível. Sua solicitação '
-                  'aguarda nova alocação.'
+            ? 'O veículo alocado ficou indisponível. Aguardando outro '
+                  'veículo.'
             : 'O veículo alocado não comporta mais os passageiros. Sua '
                   'solicitação aguarda nova alocação.',
       );
@@ -632,8 +625,7 @@ class FrotaService {
   void _ensureValidCnh(UserModel me, DateTime returnDate) {
     if (!me.hasValidCnh) {
       throw const ApiException.forbidden(
-        'Sua CNH está vencida ou não cadastrada. '
-        'Procure o setor Administrativo.',
+        'CNH vencida ou não cadastrada.',
       );
     }
     final expiry = me.cnhExpiry!;
@@ -703,8 +695,7 @@ class FrotaService {
     );
     if (conflict) {
       throw const ApiException.conflict(
-        'Você já tem uma solicitação ativa nesse período. '
-        'Escolha outro horário ou cancele a anterior.',
+        'Você já tem uma solicitação nesse período.',
       );
     }
   }

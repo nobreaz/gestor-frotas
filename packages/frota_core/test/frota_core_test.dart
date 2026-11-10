@@ -223,6 +223,40 @@ void main() {
     expect(AppNotification.fromJson(n.toJson()).toJson(), n.toJson());
   });
 
+  group('Formatos dos campos', () {
+    test('placa antiga e Mercosul, com ou sem hífen', () {
+      for (final ok in ['ABC-1234', 'abc1d23', 'ABC-1D23', 'ABC 1234']) {
+        expect(isValidPlate(ok), isTrue, reason: ok);
+      }
+      for (final bad in ['AB-1234', 'ABC-12345', 'ABC-DD23', '123-4567', '']) {
+        expect(isValidPlate(bad), isFalse, reason: bad);
+      }
+      expect(normalizePlate('abc 1d23'), 'ABC-1D23');
+      expect(normalizePlate('ABC-1234'), 'ABC-1234');
+    });
+
+    test('só letras (nomes, cargo, setor, cor) e destino', () {
+      expect(isOnlyLetters("João D'Ávila"), isTrue);
+      expect(isOnlyLetters('Ana 2'), isFalse);
+      expect(isOnlyLetters('-Ana'), isFalse);
+      expect(isValidPlace('Rio de Janeiro / RJ'), isTrue);
+      expect(isValidPlace('Rua 7'), isFalse);
+    });
+
+    test('chassi, CNH e telefone', () {
+      expect(isValidChassis('9BWZZZ377VT004251'), isTrue);
+      expect(isValidChassis('9BWZZZ377VT00425O'), isFalse); // letra O
+      expect(isValidCnhNumber('01234567890'), isTrue);
+      expect(isValidCnhNumber('0123456789'), isFalse);
+      for (final ok in ['(22) 99999-0000', '(22) 2222-2222', '2345']) {
+        expect(isValidPhone(ok), isTrue, reason: ok);
+      }
+      for (final bad in ['12', '123456', '(22) 9999-000a', '22 99999 00000']) {
+        expect(isValidPhone(bad), isFalse, reason: bad);
+      }
+    });
+  });
+
   group('Relatórios', () {
     final today = DateTime(2026, 10, 20);
     VehicleModel car({

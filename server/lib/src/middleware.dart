@@ -35,6 +35,14 @@ Middleware errorHandler() {
             },
           );
         }
+        // 23503 = chave estrangeira: excluir algo que passou a ser usado
+        // entre a conferência e o DELETE.
+        if (e.code == '23503') {
+          return Response.json(
+            statusCode: HttpStatus.conflict,
+            body: {'erro': 'O registro está em uso e não pode ser excluído.'},
+          );
+        }
         stderr.writeln('Erro do banco: $e');
         return _internalError();
       } on Object catch (e, stack) {
@@ -54,9 +62,7 @@ const _constraintMessages = {
   'veiculos_chassi_key': 'Já existe um veículo com este chassi.',
   'veiculo_sem_conflito':
       'O veículo já está reservado neste período. Escolha outro.',
-  'usuario_sem_conflito':
-      'Você já tem uma solicitação ativa nesse período. '
-      'Escolha outro horário ou cancele a anterior.',
+  'usuario_sem_conflito': 'Você já tem uma solicitação nesse período.',
 };
 
 Response _internalError() => Response.json(

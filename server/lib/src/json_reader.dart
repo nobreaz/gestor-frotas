@@ -119,6 +119,18 @@ class JsonReader {
     return null;
   }
 
+  /// Marca [key] como inválido se o [value] já lido não passar em
+  /// [isValid]. Vazio ou já com erro (ex.: obrigatório) não é conferido.
+  void format(
+    String key,
+    String? value,
+    bool Function(String) isValid,
+    String message,
+  ) {
+    if (value == null || value.isEmpty || errors.containsKey(key)) return;
+    if (!isValid(value)) errors[key] = message;
+  }
+
   void throwIfInvalid() {
     if (errors.isNotEmpty) {
       throw ApiException.badRequest(

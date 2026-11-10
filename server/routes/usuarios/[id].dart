@@ -11,7 +11,9 @@ import 'package:frota_server/src/usuarios_repository.dart';
 /// `/usuarios/{id}` (só Administrador).
 /// - GET: detalhe do usuário.
 /// - PATCH: altera dados, perfil ou ativa/desativa o acesso.
-///   Usuário nunca é apagado: desativar bloqueia o login e mantém o histórico.
+///   Desativar bloqueia o login e mantém o histórico.
+/// - DELETE: exclui o cadastro e o login, desde que o usuário não tenha
+///   solicitações (pedidas ou decididas). Com histórico, o caminho é desativar.
 Future<Response> onRequest(RequestContext context, String id) async {
   final userId = int.tryParse(id);
   if (userId == null) {
@@ -68,6 +70,32 @@ Future<Response> onRequest(RequestContext context, String id) async {
       }
 
       return Response.json(body: updated!.toJson());
+
+    case HttpMethod.delete:
+      if (context.read<UserModel>().id == userId) {
+        throw const ApiException.forbidden(
+          'Você não pode excluir o próprio usuário.',
+        );
+      }
+      final authId = await repository.authIdOf(userId);
+      if (authId == null) {
+        throw const ApiException.notFound('Usuário não encontrado.');
+      }
+      if (await repository.hasHistory(userId)) {
+        throw const ApiException.conflict(
+          'Este usuário tem solicitações registradas e não pode ser '
+          'excluído. Desative o acesso.',
+        );
+      }
+      await repository.delete(userId);
+      try {
+        await context.read<SupabaseAuth>().deleteUser(authId);
+      } on SupabaseAuthException catch (e) {
+        // O cadastro já foi apagado; sem ele a API recusa o login mesmo
+        // que o Supabase ainda tenha o usuário.
+        stderr.writeln('Aviso: usuário excluído, mas $e');
+      }
+      return Response(statusCode: HttpStatus.noContent);
 
     // ignore: no_default_cases
     default:

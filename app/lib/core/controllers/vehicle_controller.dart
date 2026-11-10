@@ -65,12 +65,23 @@ class VehicleController extends ChangeNotifier with Loadable {
     return released;
   }
 
-  /// Requisito 3.2.4: o veículo é desativado (status Inativo), nunca
-  /// apagado, para preservar o histórico de solicitações que o usaram.
+  /// Requisito 3.2.4: o veículo sai da frota (status Inativo) e o
+  /// histórico de solicitações que o usaram é mantido.
   Future<int> deactivateVehicle(int id) =>
       updateVehicle(id, {'status': VehicleStatus.inativo.name});
 
   /// Devolve um veículo inativo à frota.
   Future<int> reactivateVehicle(int id) =>
       updateVehicle(id, {'status': VehicleStatus.disponivel.name});
+
+  /// DELETE — exclui de vez. A API só permite se o veículo nunca foi usado
+  /// em uma solicitação; com histórico, devolve 409 (o caminho é desativar).
+  Future<void> deleteVehicle(int id) async {
+    await _api.delete('/veiculos/$id');
+    _vehicles = [
+      for (final v in _vehicles)
+        if (v.id != id) v,
+    ];
+    notifyListeners();
+  }
 }

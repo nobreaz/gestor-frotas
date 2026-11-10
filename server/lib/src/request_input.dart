@@ -39,7 +39,14 @@ class RequestFields {
           : null,
     );
 
-    r.throwIfInvalid();
+    r
+      ..format(
+        'destination',
+        fields.destination,
+        isValidPlace,
+        'O destino deve conter só letras.',
+      )
+      ..throwIfInvalid();
     return fields;
   }
 

@@ -1,5 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:frota_core/frota_core.dart' show formatDate;
+import 'package:frota_core/frota_core.dart'
+    show
+        formatDate,
+        isOnlyLetters,
+        isValidChassis,
+        isValidPlate,
+        isValidVehicleModel,
+        normalizePlate;
 import 'package:project/core/components/app_button_variant.dart';
 import 'package:project/core/components/input_text_field.dart';
 import 'package:project/core/controllers/request_controller.dart';
@@ -9,6 +16,7 @@ import 'package:project/core/models/vehicle_model.dart';
 import 'package:project/core/services/api_client.dart';
 import 'package:project/core/theme/app_colors.dart';
 import 'package:project/core/theme/app_text_styles.dart';
+import 'package:project/core/utils/input_formatters.dart';
 
 /// Formulário de cadastro e edição de veículo.
 /// Se [vehicle] for nulo, funciona como CADASTRO; caso contrário, EDIÇÃO.
@@ -35,13 +43,16 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
   DateTime? licensingExpiry;
   DateTime? insuranceExpiry;
 
+  bool _saving = false;
+  Map<String, String> _errors = {};
+
   bool get isEditing => widget.vehicle != null;
 
   @override
   void initState() {
     super.initState();
     final v = widget.vehicle;
-    plate = v?.plate ?? '';
+    plate = v == null ? '' : normalizePlate(v.plate);
     chassis = v?.chassis ?? '';
     model = v?.model ?? '';
     color = v?.color ?? '';
@@ -73,9 +84,8 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
     required bool becomesUnavailable,
   }) async {
     final reason = becomesUnavailable
-        ? 'Ao mudar o status para "${status.label}", o veículo deixa de '
-              'atender estas reservas:'
-        : 'Com menos lugares, o veículo deixa de comportar estas reservas:';
+        ? 'Com o status "${status.label}", estas reservas ficam sem veículo:'
+        : 'Com menos lugares, estas reservas ficam sem veículo:';
 
     final result = await showDialog<bool>(
       context: context,
@@ -115,8 +125,7 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
                 ),
               const SizedBox(height: 6),
               const Text(
-                'Se continuar, elas voltam para "Pendente" e precisam ser '
-                'realocadas em Solicitações Pendentes.',
+                'Elas voltarão para aprovação. Deseja continuar?',
                 style: TextStyle(fontSize: 12, color: AppColors.textMuted),
               ),
             ],
@@ -141,32 +150,69 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
     return result == true;
   }
 
+  /// Confere o formato de cada campo. Devolve os erros por campo (mesmas
+  /// chaves que a API usa em `campos`).
+  Map<String, String> _validate() {
+    final e = <String, String>{};
+    final maxYear = DateTime.now().year + 1;
+
+    if (plate.trim().isEmpty) {
+      e['plate'] = 'Informe a placa.';
+    } else if (!isValidPlate(plate)) {
+      e['plate'] = 'Use o formato ABC-1234 ou ABC-1D23.';
+    }
+    if (model.trim().isEmpty) {
+      e['model'] = 'Informe o modelo.';
+    } else if (!isValidVehicleModel(model)) {
+      e['model'] = 'Modelo inválido.';
+    }
+    if (chassis.trim().isEmpty) {
+      e['chassis'] = 'Informe o chassi.';
+    } else if (!isValidChassis(chassis)) {
+      e['chassis'] = 'O chassi tem 17 caracteres.';
+    }
+    if (color.trim().isEmpty) {
+      e['color'] = 'Informe a cor.';
+    } else if (!isOnlyLetters(color)) {
+      e['color'] = 'Use apenas letras.';
+    }
+
+    final y = int.tryParse(year);
+    if (y == null) {
+      e['year'] = 'Informe o ano.';
+    } else if (y < 1950 || y > maxYear) {
+      e['year'] = 'Informe um ano entre 1950 e $maxYear.';
+    }
+    final n = int.tryParse(seats);
+    if (n == null) {
+      e['seats'] = 'Informe a quantidade de lugares.';
+    } else if (n < 1 || n > 99) {
+      e['seats'] = 'Informe entre 1 e 99 lugares.';
+    }
+    if (int.tryParse(mileage) == null) {
+      e['mileage'] = 'Informe a quilometragem.';
+    }
+    if (licensingExpiry == null) e['licensingExpiry'] = 'Selecione a data.';
+    if (insuranceExpiry == null) e['insuranceExpiry'] = 'Selecione a data.';
+    return e;
+  }
+
   Future<void> _save() async {
-    if (plate.trim().isEmpty || model.trim().isEmpty) {
-      _showMessage('Preencha ao menos a placa e o modelo do veículo.');
+    if (_saving) return;
+    final errors = _validate();
+    setState(() => _errors = errors);
+    if (errors.isNotEmpty) {
+      _showMessage('Verifique os campos destacados.');
       return;
     }
 
-    if (licensingExpiry == null || insuranceExpiry == null) {
-      _showMessage('Informe o vencimento do licenciamento/IPVA e do seguro.');
-      return;
-    }
-
-    // Número inválido vai como null: o servidor devolve a mensagem do campo.
-    final parsedYear = int.tryParse(year.trim());
-    final parsedSeats = int.tryParse(seats.trim());
-    final parsedMileage = int.tryParse(mileage.trim());
-
-    // Revisão é opcional: vazio apaga; texto inválido é avisado aqui
-    // (senão viraria null e apagaria o valor sem querer).
-    final parsedNextService = int.tryParse(nextService.trim());
-    if (nextService.trim().isNotEmpty && parsedNextService == null) {
-      _showMessage('Km da próxima revisão deve ser um número.');
-      return;
-    }
+    final parsedYear = int.parse(year);
+    final parsedSeats = int.parse(seats);
+    final parsedMileage = int.parse(mileage);
+    final parsedNextService = int.tryParse(nextService); // vazio apaga
 
     final data = <String, dynamic>{
-      'plate': plate.trim(),
+      'plate': normalizePlate(plate),
       'chassis': chassis.trim(),
       'model': model.trim(),
       'color': color.trim(),
@@ -193,10 +239,7 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
           vehicle.status == VehicleStatus.emUso ||
           bookings.any((r) => r.status == RequestStatus.emUso);
       if (status != vehicle.status && inUse) {
-        _showMessage(
-          'O veículo está em uso. Registre a devolução (check-in) '
-          'antes de mudar o status para "${status.label}".',
-        );
+        _showMessage('O veículo está em uso. Registre a devolução primeiro.');
         return;
       }
 
@@ -206,9 +249,7 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
       );
       final toRelease = becomesUnavailable
           ? approved.toList()
-          : approved
-                .where((r) => r.passengers > (parsedSeats ?? r.passengers))
-                .toList();
+          : approved.where((r) => r.passengers > parsedSeats).toList();
 
       if (toRelease.isNotEmpty) {
         final confirmed = await _confirmRelease(
@@ -220,40 +261,39 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
 
       // "Em uso" só muda pela retirada/devolução: o status só vai se mudou.
       if (status != vehicle.status) data['status'] = status.name;
+    }
 
-      try {
+    setState(() => _saving = true);
+    try {
+      if (isEditing) {
         // Quem libera as reservas e avisa os solicitantes é o servidor.
         final released = await VehicleController.instance.updateVehicle(
-          vehicle.id,
+          widget.vehicle!.id,
           data,
         );
         if (!mounted) return;
         _showMessage(
           released == 0
-              ? 'Veículo atualizado com sucesso!'
-              : 'Veículo atualizado. $released reserva(s) '
-                    'voltaram para aprovação.',
+              ? 'Veículo atualizado.'
+              : 'Veículo atualizado. $released reserva(s) voltaram para '
+                    'aprovação.',
         );
-      } on ApiError catch (e) {
-        if (mounted) _showMessage(e.details);
-        return;
-      }
-    } else {
-      try {
+      } else {
         await VehicleController.instance.addVehicle({
           ...data,
           'status': status.name,
         });
         if (!mounted) return;
-        _showMessage('Veículo cadastrado com sucesso!');
-      } on ApiError catch (e) {
-        if (mounted) _showMessage(e.details);
-        return;
+        _showMessage('Veículo cadastrado.');
       }
+      Navigator.of(context).pop();
+    } on ApiError catch (e) {
+      if (!mounted) return;
+      setState(() => _errors = e.fields);
+      _showMessage(e.message);
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
-
-    if (!mounted) return;
-    Navigator.of(context).pop();
   }
 
   @override
@@ -270,126 +310,154 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
       backgroundColor: AppColors.background,
       body: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            const SizedBox(height: 20),
-            InputTextField(
-              label: 'Placa',
-              hint: 'AAA-0A00',
-              inputText: plate,
-              onChanged: (text) => plate = text,
-            ),
-            const SizedBox(height: 16),
-            InputTextField(
-              label: 'Modelo',
-              hint: 'Ex.: Toyota Corolla',
-              inputText: model,
-              onChanged: (text) => model = text,
-            ),
-            const SizedBox(height: 16),
-            InputTextField(
-              label: 'Chassi',
-              hint: 'Informe o número do chassi',
-              inputText: chassis,
-              onChanged: (text) => chassis = text,
-            ),
-            const SizedBox(height: 16),
-            InputTextField(
-              label: 'Cor',
-              hint: 'Ex.: Prata',
-              inputText: color,
-              onChanged: (text) => color = text,
-            ),
-            const SizedBox(height: 16),
-            InputTextField(
-              label: 'Ano',
-              type: InputFieldType.number,
-              hint: 'Ex.: 2022',
-              inputText: year,
-              onChanged: (text) => year = text,
-            ),
-            const SizedBox(height: 16),
-            InputTextField(
-              label: 'Quantidade de lugares',
-              type: InputFieldType.number,
-              hint: 'Ex.: 5',
-              inputText: seats,
-              onChanged: (text) => seats = text,
-            ),
-            const SizedBox(height: 16),
-            InputTextField(
-              label: 'Quilometragem',
-              type: InputFieldType.number,
-              hint: 'Ex.: 42500',
-              inputText: mileage,
-              onChanged: (text) => mileage = text,
-            ),
-            const SizedBox(height: 16),
-            // Alerta nos Relatórios quando faltarem até 1.000 km.
-            InputTextField(
-              label: 'Km da próxima revisão (opcional)',
-              type: InputFieldType.number,
-              hint: 'Ex.: 50000',
-              inputText: nextService,
-              onChanged: (text) => nextService = text,
-            ),
-            const SizedBox(height: 16),
-            // Datas passadas são aceitas: o documento pode já estar vencido.
-            InputTextField(
-              label: 'Vencimento do licenciamento/IPVA',
-              type: InputFieldType.date,
-              hint: 'Selecione a data',
-              inputText: _fmtFullDate(licensingExpiry),
-              firstDate: DateTime(2000),
-              onChanged: (_) {},
-              onDateSelected: (date) => setState(() => licensingExpiry = date),
-            ),
-            const SizedBox(height: 16),
-            InputTextField(
-              label: 'Vencimento do seguro',
-              type: InputFieldType.date,
-              hint: 'Selecione a data',
-              inputText: _fmtFullDate(insuranceExpiry),
-              firstDate: DateTime(2000),
-              onChanged: (_) {},
-              onDateSelected: (date) => setState(() => insuranceExpiry = date),
-            ),
-            const SizedBox(height: 20),
-            _dropdown<VehicleType>(
-              label: 'Tipo / categoria',
-              value: type,
-              items: VehicleType.values,
-              labelBuilder: (t) => t.label,
-              onChanged: (v) => setState(() => type = v),
-            ),
-            const SizedBox(height: 20),
-            _dropdown<VehicleStatus>(
-              label: 'Status operacional',
-              value: status,
-              // "Em uso" vem da retirada; só aparece se já for o status atual.
-              items: [
-                for (final s in VehicleStatus.values)
-                  if (s != VehicleStatus.emUso ||
-                      widget.vehicle?.status == VehicleStatus.emUso)
-                    s,
-              ],
-              labelBuilder: (s) => s.label,
-              onChanged: (v) => setState(() => status = v),
-            ),
-            const SizedBox(height: 40),
-            AppButton(
-              label: isEditing ? 'Salvar alterações' : 'Cadastrar',
-              onPressed: _save,
-            ),
-            const SizedBox(height: 10),
-            AppButton(
-              variant: AppButtonVariant.cancel,
-              label: 'Cancelar',
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            const SizedBox(height: 20),
-          ],
+        // Largura total: sem isso a coluna encolhe e os campos ficam à esquerda.
+        child: SizedBox(
+          width: double.infinity,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const SizedBox(height: 20),
+              InputTextField(
+                label: 'Placa',
+                hint: 'ABC-1D23',
+                inputText: plate,
+                inputFormatters: AppFormatters.plate,
+                errorText: _errors['plate'],
+                onChanged: (text) => plate = text,
+              ),
+              const SizedBox(height: 16),
+              InputTextField(
+                label: 'Modelo',
+                hint: 'Ex.: Toyota Corolla',
+                inputText: model,
+                inputFormatters: AppFormatters.vehicleModel,
+                textCapitalization: TextCapitalization.words,
+                errorText: _errors['model'],
+                onChanged: (text) => model = text,
+              ),
+              const SizedBox(height: 16),
+              InputTextField(
+                label: 'Chassi',
+                hint: '17 letras e números',
+                inputText: chassis,
+                inputFormatters: AppFormatters.chassis,
+                errorText: _errors['chassis'],
+                onChanged: (text) => chassis = text,
+              ),
+              const SizedBox(height: 16),
+              InputTextField(
+                label: 'Cor',
+                hint: 'Ex.: Prata',
+                inputText: color,
+                inputFormatters: AppFormatters.letters,
+                textCapitalization: TextCapitalization.words,
+                errorText: _errors['color'],
+                onChanged: (text) => color = text,
+              ),
+              const SizedBox(height: 16),
+              InputTextField(
+                label: 'Ano',
+                type: InputFieldType.number,
+                hint: 'Ex.: 2022',
+                inputText: year,
+                inputFormatters: AppFormatters.digits(4),
+                errorText: _errors['year'],
+                onChanged: (text) => year = text,
+              ),
+              const SizedBox(height: 16),
+              InputTextField(
+                label: 'Quantidade de lugares',
+                type: InputFieldType.number,
+                hint: 'Ex.: 5',
+                inputText: seats,
+                inputFormatters: AppFormatters.digits(2),
+                errorText: _errors['seats'],
+                onChanged: (text) => seats = text,
+              ),
+              const SizedBox(height: 16),
+              InputTextField(
+                label: 'Quilometragem',
+                type: InputFieldType.number,
+                hint: 'Ex.: 42500',
+                inputText: mileage,
+                inputFormatters: AppFormatters.digits(7),
+                errorText: _errors['mileage'],
+                onChanged: (text) => mileage = text,
+              ),
+              const SizedBox(height: 16),
+              // Alerta nos Relatórios quando faltarem até 1.000 km.
+              InputTextField(
+                label: 'Km da próxima revisão (opcional)',
+                type: InputFieldType.number,
+                hint: 'Ex.: 50000',
+                inputText: nextService,
+                inputFormatters: AppFormatters.digits(7),
+                errorText: _errors['nextServiceMileage'],
+                onChanged: (text) => nextService = text,
+              ),
+              const SizedBox(height: 16),
+              // Datas passadas são aceitas: o documento pode já estar vencido.
+              InputTextField(
+                label: 'Vencimento do licenciamento/IPVA',
+                type: InputFieldType.date,
+                hint: 'Selecione a data',
+                inputText: _fmtFullDate(licensingExpiry),
+                firstDate: DateTime(2000),
+                errorText: _errors['licensingExpiry'],
+                onChanged: (_) {},
+                onDateSelected: (date) =>
+                    setState(() => licensingExpiry = date),
+              ),
+              const SizedBox(height: 16),
+              InputTextField(
+                label: 'Vencimento do seguro',
+                type: InputFieldType.date,
+                hint: 'Selecione a data',
+                inputText: _fmtFullDate(insuranceExpiry),
+                firstDate: DateTime(2000),
+                errorText: _errors['insuranceExpiry'],
+                onChanged: (_) {},
+                onDateSelected: (date) =>
+                    setState(() => insuranceExpiry = date),
+              ),
+              const SizedBox(height: 20),
+              _dropdown<VehicleType>(
+                label: 'Tipo / categoria',
+                value: type,
+                items: VehicleType.values,
+                labelBuilder: (t) => t.label,
+                onChanged: (v) => setState(() => type = v),
+              ),
+              const SizedBox(height: 20),
+              _dropdown<VehicleStatus>(
+                label: 'Status operacional',
+                value: status,
+                // "Em uso" vem da retirada; só aparece se já for o status atual.
+                items: [
+                  for (final s in VehicleStatus.values)
+                    if (s != VehicleStatus.emUso ||
+                        widget.vehicle?.status == VehicleStatus.emUso)
+                      s,
+                ],
+                labelBuilder: (s) => s.label,
+                onChanged: (v) => setState(() => status = v),
+              ),
+              const SizedBox(height: 40),
+              AppButton(
+                label: _saving
+                    ? 'Salvando...'
+                    : (isEditing ? 'Salvar alterações' : 'Cadastrar'),
+                onPressed: _save,
+              ),
+              const SizedBox(height: 10),
+              AppButton(
+                variant: AppButtonVariant.cancel,
+                label: 'Cancelar',
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
         ),
       ),
     );

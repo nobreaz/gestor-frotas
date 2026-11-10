@@ -6,6 +6,7 @@ import 'package:project/core/controllers/vehicle_controller.dart';
 import 'package:project/core/models/request_model.dart';
 import 'package:project/core/models/user_model.dart';
 import 'package:project/core/services/api_client.dart';
+import 'package:project/core/services/feedback.dart';
 import 'package:project/core/theme/app_colors.dart';
 import 'package:project/pages/user_form_page.dart';
 
@@ -92,6 +93,8 @@ class UserDetailPage extends StatelessWidget {
               if (!isSelf) ...[
                 const SizedBox(height: 12),
                 _accessButton(context, user),
+                const SizedBox(height: 8),
+                _deleteButton(context, user),
               ],
               const SizedBox(height: 24),
               const Padding(
@@ -127,8 +130,8 @@ class UserDetailPage extends StatelessWidget {
     );
   }
 
-  /// Desativar ou reativar o acesso. O usuário nunca é apagado:
-  /// o histórico de solicitações continua disponível.
+  /// Desativar ou reativar o acesso. O histórico de solicitações
+  /// continua disponível.
   Widget _accessButton(BuildContext context, UserModel user) {
     final deactivate = user.active;
     final color = deactivate ? AppColors.rejected : AppColors.approved;
@@ -157,10 +160,9 @@ class UserDetailPage extends StatelessWidget {
         title: Text(deactivate ? 'Desativar acesso' : 'Reativar acesso'),
         content: Text(
           deactivate
-              ? '${user.name} não conseguirá mais entrar no aplicativo. '
-                    'O histórico de solicitações é mantido e você pode '
-                    'reativar depois.'
-              : '${user.name} voltará a ter acesso ao aplicativo.',
+              ? 'Tem certeza de que deseja desativar o acesso de '
+                    '${user.name}? Esta ação poderá ser desfeita.'
+              : 'Deseja reativar o acesso de ${user.name}?',
         ),
         actions: [
           TextButton(
@@ -193,6 +195,58 @@ class UserDetailPage extends StatelessWidget {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Exclusão definitiva: a API só deixa se o usuário não tem
+  /// solicitações (com histórico, o caminho é desativar o acesso).
+  Widget _deleteButton(BuildContext context, UserModel user) {
+    return TextButton.icon(
+      style: TextButton.styleFrom(
+        foregroundColor: AppColors.rejected,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+      ),
+      icon: const Icon(Icons.delete_outline),
+      label: const Text(
+        'Excluir usuário',
+        style: TextStyle(fontWeight: FontWeight.w700),
+      ),
+      onPressed: () => _delete(context, user),
+    );
+  }
+
+  Future<void> _delete(BuildContext context, UserModel user) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Excluir usuário'),
+        content: Text(
+          'Tem certeza de que deseja excluir ${user.name}? '
+          'Esta ação não poderá ser desfeita.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Excluir',
+              style: TextStyle(color: AppColors.rejected),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final navigator = Navigator.of(context);
+    final ok = await runWithFeedback(
+      context,
+      () => UserController.instance.deleteUser(user.id),
+      success: 'Usuário excluído.',
+    );
+    if (ok) navigator.pop();
   }
 
   ShapeDecoration _cardDecoration() {

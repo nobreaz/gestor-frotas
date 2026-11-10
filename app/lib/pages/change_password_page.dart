@@ -52,7 +52,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
       return;
     }
     if (!_matches) {
-      _show('A confirmação não confere com a nova senha.');
+      _show('As senhas não conferem.');
       return;
     }
     if (newPassword == currentPassword) {
@@ -67,7 +67,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
         newPassword,
       );
       if (!mounted) return;
-      _show('Senha alterada com sucesso!');
+      _show('Senha alterada.');
       Navigator.of(context).pop();
     } on ApiError catch (e) {
       _show(e.message);
@@ -87,70 +87,72 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
       ),
-      body: Container(
-        color: AppColors.background,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            return SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                child: IntrinsicHeight(
-                  child: KeyedSubtree(
-                    key: ValueKey(_formVersion),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        const SizedBox(height: 20),
-                        InputTextField(
-                          label: 'Senha atual',
-                          type: InputFieldType.password,
-                          inputText: '',
-                          hint: '********',
-                          onChanged: (text) =>
-                              setState(() => currentPassword = text),
-                        ),
-                        const SizedBox(height: 20),
-                        InputTextField(
-                          label: 'Nova senha',
-                          type: InputFieldType.password,
-                          inputText: '',
-                          hint: '********',
-                          onChanged: (text) =>
-                              setState(() => newPassword = text),
-                        ),
-                        const SizedBox(height: 20),
-                        InputTextField(
-                          label: 'Confirmar nova senha',
-                          type: InputFieldType.password,
-                          inputText: '',
-                          hint: '********',
-                          onChanged: (text) =>
-                              setState(() => confirmPassword = text),
-                        ),
-                        const SizedBox(height: 20),
-                        _requirements(),
-                        const Spacer(),
-                        const SizedBox(height: 40),
-                        AppButton(
-                          label: _saving ? 'Salvando...' : 'Confirmar',
-                          onPressed: _submit,
-                        ),
-                        const SizedBox(height: 10),
-                        AppButton(
-                          variant: AppButtonVariant.cancel,
-                          label: 'Limpar',
-                          onPressed: _clear,
-                        ),
-                        const SizedBox(height: 20),
-                      ],
-                    ),
+      backgroundColor: AppColors.background,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            // Largura total: sem isso a coluna encolhe para a largura dos
+            // campos e fica encostada à esquerda.
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: constraints.maxHeight,
+                minWidth: constraints.maxWidth - 40,
+              ),
+              child: IntrinsicHeight(
+                child: KeyedSubtree(
+                  key: ValueKey(_formVersion),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const SizedBox(height: 20),
+                      InputTextField(
+                        label: 'Senha atual',
+                        type: InputFieldType.password,
+                        inputText: '',
+                        hint: '********',
+                        onChanged: (text) =>
+                            setState(() => currentPassword = text),
+                      ),
+                      const SizedBox(height: 20),
+                      InputTextField(
+                        label: 'Nova senha',
+                        type: InputFieldType.password,
+                        inputText: '',
+                        hint: '********',
+                        onChanged: (text) => setState(() => newPassword = text),
+                      ),
+                      const SizedBox(height: 20),
+                      InputTextField(
+                        label: 'Confirmar nova senha',
+                        type: InputFieldType.password,
+                        inputText: '',
+                        hint: '********',
+                        onChanged: (text) =>
+                            setState(() => confirmPassword = text),
+                      ),
+                      const SizedBox(height: 20),
+                      _requirements(),
+                      const Spacer(),
+                      const SizedBox(height: 40),
+                      AppButton(
+                        label: _saving ? 'Salvando...' : 'Confirmar',
+                        onPressed: _submit,
+                      ),
+                      const SizedBox(height: 10),
+                      AppButton(
+                        variant: AppButtonVariant.cancel,
+                        label: 'Limpar',
+                        onPressed: _clear,
+                      ),
+                      const SizedBox(height: 20),
+                    ],
                   ),
                 ),
               ),
-            );
-          },
-        ),
+            ),
+          );
+        },
       ),
     );
   }

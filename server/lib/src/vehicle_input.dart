@@ -1,10 +1,45 @@
 import 'package:frota_core/frota_core.dart';
 import 'package:frota_server/src/json_reader.dart';
 
-/// Placa e chassi são guardados sem espaços e em maiúsculas,
-/// para a restrição `unique` do banco pegar "abc-1d23" e "ABC-1D23".
-String _code(String value) =>
-    value.replaceAll(RegExp(r'\s+'), '').toUpperCase();
+/// Placa guardada sempre como ABC-1D23 e chassi sem espaços e em
+/// maiúsculas, para a restrição `unique` do banco pegar "abc1d23" e
+/// "ABC-1D23".
+String _plate(JsonReader r) {
+  final value = r.requiredText('plate', 'Placa');
+  r.format(
+    'plate',
+    value,
+    isValidPlate,
+    'Placa inválida. Use ABC-1234 ou ABC-1D23.',
+  );
+  return normalizePlate(value);
+}
+
+String _chassis(JsonReader r) {
+  final value = r
+      .requiredText('chassis', 'Chassi')
+      .replaceAll(RegExp(r'\s+'), '')
+      .toUpperCase();
+  r.format(
+    'chassis',
+    value,
+    isValidChassis,
+    'Chassi inválido. São 17 letras e números (sem I, O e Q).',
+  );
+  return value;
+}
+
+String _model(JsonReader r) {
+  final value = r.requiredText('model', 'Modelo');
+  r.format('model', value, isValidVehicleModel, 'Modelo inválido.');
+  return value;
+}
+
+String _color(JsonReader r) {
+  final value = r.requiredText('color', 'Cor');
+  r.format('color', value, isOnlyLetters, 'A cor deve conter só letras.');
+  return value;
+}
 
 int get _maxYear => DateTime.now().year + 1;
 
@@ -27,13 +62,13 @@ VehicleModel parseNewVehicle(Map<String, dynamic> json) {
 
   final vehicle = VehicleModel(
     id: 0, // definido pelo banco
-    plate: _code(r.requiredText('plate', 'Placa')),
-    chassis: _code(r.requiredText('chassis', 'Chassi')),
-    model: r.requiredText('model', 'Modelo'),
-    color: r.requiredText('color', 'Cor'),
+    plate: _plate(r),
+    chassis: _chassis(r),
+    model: _model(r),
+    color: _color(r),
     year: r.integer('year', 'Ano', min: 1950, max: _maxYear) ?? 0,
     seats: r.integer('seats', 'Lugares', min: 1, max: 99) ?? 0,
-    mileage: r.integer('mileage', 'Quilometragem') ?? 0,
+    mileage: r.integer('mileage', 'Quilometragem', max: 9999999) ?? 0,
     type: r.has('type')
         ? r.choice('type', VehicleType.values, 'Tipo') ?? VehicleType.passeio
         : VehicleType.passeio,
@@ -61,14 +96,10 @@ Map<String, Object?> parseVehicleUpdate(Map<String, dynamic> json) {
   final r = JsonReader(json);
   final changes = <String, Object?>{};
 
-  if (r.has('plate')) {
-    changes['placa'] = _code(r.requiredText('plate', 'Placa'));
-  }
-  if (r.has('chassis')) {
-    changes['chassi'] = _code(r.requiredText('chassis', 'Chassi'));
-  }
-  if (r.has('model')) changes['modelo'] = r.requiredText('model', 'Modelo');
-  if (r.has('color')) changes['cor'] = r.requiredText('color', 'Cor');
+  if (r.has('plate')) changes['placa'] = _plate(r);
+  if (r.has('chassis')) changes['chassi'] = _chassis(r);
+  if (r.has('model')) changes['modelo'] = _model(r);
+  if (r.has('color')) changes['cor'] = _color(r);
   if (r.has('year')) {
     changes['ano'] = r.integer('year', 'Ano', min: 1950, max: _maxYear);
   }
@@ -76,7 +107,11 @@ Map<String, Object?> parseVehicleUpdate(Map<String, dynamic> json) {
     changes['lugares'] = r.integer('seats', 'Lugares', min: 1, max: 99);
   }
   if (r.has('mileage')) {
-    changes['quilometragem'] = r.integer('mileage', 'Quilometragem');
+    changes['quilometragem'] = r.integer(
+      'mileage',
+      'Quilometragem',
+      max: 9999999,
+    );
   }
   if (r.has('type')) {
     changes['tipo'] = r.choice('type', VehicleType.values, 'Tipo')?.name;

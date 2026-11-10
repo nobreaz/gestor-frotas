@@ -10,6 +10,7 @@ import 'package:project/core/models/vehicle_model.dart';
 import 'package:project/core/services/api_client.dart';
 import 'package:project/core/services/feedback.dart';
 import 'package:project/core/theme/app_colors.dart';
+import 'package:project/core/utils/input_formatters.dart';
 
 /// Tela do aprovador, em abas:
 /// - Pendentes: aprovar (alocando um veículo) ou recusar (com justificativa).
@@ -42,9 +43,7 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
     if (eligible.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Nenhum veículo disponível atende aos critérios desta solicitação.',
-          ),
+          content: Text('Nenhum veículo disponível para esta solicitação.'),
         ),
       );
       return;
@@ -65,8 +64,7 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
     await runWithFeedback(
       context,
       () => RequestController.instance.approveRequest(request.id, selected.id),
-      success:
-          'Solicitação #${request.id} aprovada — veículo ${selected.plate}.',
+      success: 'Solicitação aprovada (${selected.plate}).',
     );
   }
 
@@ -83,7 +81,7 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Informe o motivo da recusa. A justificativa é obrigatória.',
+              'Informe o motivo da recusa.',
               style: TextStyle(fontSize: 13, color: AppColors.textMuted),
             ),
             const SizedBox(height: 12),
@@ -91,6 +89,8 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
               controller: controller,
               maxLines: 3,
               autofocus: true,
+              inputFormatters: AppFormatters.freeText(),
+              textCapitalization: TextCapitalization.sentences,
               decoration: InputDecoration(
                 hintText: 'Ex.: nenhum veículo disponível na data.',
                 border: OutlineInputBorder(
@@ -125,7 +125,7 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
     await runWithFeedback(
       context,
       () => RequestController.instance.rejectRequest(request.id, justification),
-      success: 'Solicitação #${request.id} recusada.',
+      success: 'Solicitação recusada.',
     );
   }
 

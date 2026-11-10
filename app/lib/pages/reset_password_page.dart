@@ -33,10 +33,7 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
     try {
       await UserController.instance.sendPasswordReset(email);
       // Mesma mensagem exista ou não o e-mail: não revela quem tem cadastro.
-      _show(
-        'Se o e-mail estiver cadastrado, você receberá um link para '
-        'redefinir a senha.',
-      );
+      _show('Se o e-mail estiver cadastrado, você receberá um link.');
     } on ApiError catch (e) {
       _show(e.message);
     } finally {

@@ -152,8 +152,8 @@ class RequestCard extends StatelessWidget {
               color: AppColors.rejected,
               icon: Icons.car_crash_outlined,
               text:
-                  'Retirada não realizada (${_failureText()}). Os '
-                  'Aprovadores foram avisados e vão alocar outro veículo.',
+                  'Retirada não realizada (${_failureText()}). '
+                  'Aguardando outro veículo.',
             ),
           ],
           if (request.status == RequestStatus.cancelada &&

@@ -81,6 +81,31 @@ void main() {
       );
     });
 
+    test('formato: nome/cargo/setor só letras, telefone e CNH', () {
+      expect(
+        () => parseUserUpdate({
+          'name': 'Ana 2',
+          'role': 'Técnica',
+          'department': 'TI@',
+          'phone': '123456',
+          'cnhNumber': '123',
+        }),
+        _badRequestWith(['name', 'department', 'phone', 'cnhNumber']),
+      );
+      expect(
+        parseUserUpdate({
+          'name': "Ana D'Ávila",
+          'phone': '(22) 99999-0000',
+          'cnhNumber': '01234567890',
+        }),
+        {
+          'nome': "Ana D'Ávila",
+          'telefone': '(22) 99999-0000',
+          'cnh_numero': '01234567890',
+        },
+      );
+    });
+
     test('e-mail não pode ser alterado', () {
       expect(
         () => parseUserUpdate({'email': 'outro@empresa.com'}),
@@ -98,7 +123,7 @@ void main() {
 
     test('recusa qualquer outro campo', () {
       expect(
-        () => parseMeUpdate({'phone': '1', 'profile': 'aprovador'}),
+        () => parseMeUpdate({'phone': '2345', 'profile': 'aprovador'}),
         _badRequestWith(['profile']),
       );
     });

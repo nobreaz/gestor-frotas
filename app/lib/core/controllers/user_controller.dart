@@ -40,9 +40,7 @@ class UserController extends ChangeNotifier {
 
   /// Usuário logado. As telas internas só abrem depois do login.
   UserModel get currentUser =>
-      _currentUser ??
-      _lastUser ??
-      (throw StateError('Nenhum usuário logado.'));
+      _currentUser ?? _lastUser ?? (throw StateError('Nenhum usuário logado.'));
 
   /// Usuários carregados por [loadUsers] (só Aprovador).
   List<UserModel> get users => List.unmodifiable(_users);
@@ -200,6 +198,17 @@ class UserController extends ChangeNotifier {
     return updated;
   }
 
+  /// Exclui o cadastro e o login. A API só permite se o usuário não tem
+  /// solicitações (pedidas ou decididas); com histórico, devolve 409.
+  Future<void> deleteUser(int id) async {
+    await _api.delete('/usuarios/$id');
+    _users = [
+      for (final u in _users)
+        if (u.id != id) u,
+    ];
+    notifyListeners();
+  }
+
   static int _byActiveThenName(UserModel a, UserModel b) {
     if (a.active != b.active) return a.active ? -1 : 1;
     return a.name.toLowerCase().compareTo(b.name.toLowerCase());
@@ -210,7 +219,7 @@ class UserController extends ChangeNotifier {
       case 'invalid_credentials':
         return 'E-mail ou senha incorretos.';
       case 'user_banned':
-        return 'Seu acesso está desativado. Procure o Aprovador.';
+        return 'Seu acesso está desativado.';
       case 'over_request_rate_limit':
       case 'over_email_send_rate_limit':
         return 'Muitas tentativas. Aguarde alguns minutos.';

@@ -152,6 +152,28 @@ class VeiculosRepository {
     );
   }
 
+  /// O veículo aparece em alguma solicitação (de qualquer status)?
+  /// Se sim, não pode ser excluído: os relatórios dependem dele.
+  Future<bool> hasHistory(int id) async {
+    final result = await _db.execute(
+      Sql.named(
+        'SELECT 1 FROM solicitacoes '
+        'WHERE veiculo_id = @id OR falha_retirada_veiculo_id = @id LIMIT 1',
+      ),
+      parameters: {'id': id},
+    );
+    return result.isNotEmpty;
+  }
+
+  /// Exclui o veículo. Devolve `false` se o id não existir.
+  Future<bool> delete(int id) async {
+    final result = await _db.execute(
+      Sql.named('DELETE FROM veiculos WHERE id = @id'),
+      parameters: {'id': id},
+    );
+    return result.affectedRows > 0;
+  }
+
   Future<VehicleModel?> _one(
     String sql,
     Map<String, Object?> parameters,

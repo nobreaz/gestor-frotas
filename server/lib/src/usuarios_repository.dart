@@ -114,6 +114,31 @@ class UsuariosRepository {
     );
   }
 
+  /// O usuário pediu ou decidiu alguma solicitação? Se sim, não pode ser
+  /// excluído: o histórico e os relatórios dependem dele.
+  Future<bool> hasHistory(int id) async {
+    final result = await _db.execute(
+      Sql.named(
+        'SELECT 1 FROM solicitacoes '
+        'WHERE solicitante_id = @id OR aprovador_id = @id LIMIT 1',
+      ),
+      parameters: {'id': id},
+    );
+    return result.isNotEmpty;
+  }
+
+  /// Exclui o cadastro, com as notificações e os aparelhos dele.
+  /// O login no Supabase Auth é apagado pela rota, depois disto.
+  Future<void> delete(int id) async {
+    await _db.execute(
+      Sql.named('''
+        WITH n AS (DELETE FROM notificacoes WHERE usuario_id = @id),
+             d AS (DELETE FROM dispositivos WHERE usuario_id = @id)
+        DELETE FROM usuarios WHERE id = @id'''),
+      parameters: {'id': id},
+    );
+  }
+
   Future<UserModel?> _one(String sql, Map<String, Object?> parameters) async {
     final result = await _db.execute(Sql.named(sql), parameters: parameters);
     return result.isEmpty ? null : _fromRow(result.first);

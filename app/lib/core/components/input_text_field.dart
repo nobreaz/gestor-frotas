@@ -18,6 +18,14 @@ class InputTextField extends StatefulWidget {
   final DateTime? lastDate;
   final ValueChanged<DateTime>? onDateSelected;
 
+  /// Filtros de digitação (ver `AppFormatters`).
+  final List<TextInputFormatter>? inputFormatters;
+
+  /// Mensagem de erro mostrada abaixo do campo.
+  final String? errorText;
+
+  final TextCapitalization textCapitalization;
+
   const InputTextField({
     super.key,
     required this.inputText,
@@ -30,6 +38,9 @@ class InputTextField extends StatefulWidget {
     this.firstDate,
     this.lastDate,
     this.onDateSelected,
+    this.inputFormatters,
+    this.errorText,
+    this.textCapitalization = TextCapitalization.none,
   });
 
   @override
@@ -63,8 +74,9 @@ class _InputTextFieldState extends State<InputTextField> {
   Future<void> _handleTap() async {
     final now = DateTime.now();
     final effectiveFirstDate = widget.firstDate ?? now;
-    final initialDate =
-        effectiveFirstDate.isAfter(now) ? effectiveFirstDate : now;
+    final initialDate = effectiveFirstDate.isAfter(now)
+        ? effectiveFirstDate
+        : now;
 
     if (widget.type == InputFieldType.date) {
       final picked = await showDatePicker(
@@ -152,9 +164,12 @@ class _InputTextFieldState extends State<InputTextField> {
             keyboardType: widget.type == InputFieldType.number
                 ? TextInputType.number
                 : widget.keyboardType,
-            inputFormatters: widget.type == InputFieldType.number
-                ? [FilteringTextInputFormatter.digitsOnly]
-                : null,
+            textCapitalization: widget.textCapitalization,
+            inputFormatters: [
+              if (widget.type == InputFieldType.number)
+                FilteringTextInputFormatter.digitsOnly,
+              ...?widget.inputFormatters,
+            ],
             decoration: InputDecoration(
               border: const OutlineInputBorder(borderSide: BorderSide.none),
               hintText: widget.hint,
@@ -180,6 +195,22 @@ class _InputTextFieldState extends State<InputTextField> {
             ),
           ),
         ),
+        if (widget.errorText != null)
+          // Mesma largura do campo, para não deslocar a coluna.
+          SizedBox(
+            width: MediaQuery.of(context).size.width * widget.widthFactor,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 8, top: 4),
+              child: Text(
+                widget.errorText!,
+                style: const TextStyle(
+                  color: AppColors.rejected,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }

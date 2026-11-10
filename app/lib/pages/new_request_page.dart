@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:frota_core/frota_core.dart' show isValidPlace;
 import 'package:project/core/components/app_button_variant.dart';
 import 'package:project/core/components/input_text_field.dart';
 import 'package:project/core/controllers/request_controller.dart';
@@ -11,6 +12,7 @@ import 'package:project/core/models/vehicle_model.dart';
 import 'package:project/core/services/api_client.dart';
 import 'package:project/core/theme/app_colors.dart';
 import 'package:project/core/theme/app_text_styles.dart';
+import 'package:project/core/utils/input_formatters.dart';
 
 class NewRequestPage extends StatefulWidget {
   /// Quando informado, a tela funciona em modo de edição.
@@ -101,31 +103,30 @@ class _NewRequestPageState extends State<NewRequestPage> {
 
     // Segregação de funções: só o perfil Padrão solicita veículo.
     if (!user.profile.canRequest) {
-      _showMessage(
-        'É necessário ter o perfil Padrão para solicitar veículos. Perfil atual: ${user.profile.label}.',
-      );
+      _showMessage('Apenas o perfil Padrão pode solicitar veículos.');
       return;
     }
 
     // Regra 5.2.4: CNH vencida ou não cadastrada não pode solicitar.
     if (!user.hasValidCnh) {
-      _showMessage(
-        'Sua CNH está vencida ou não cadastrada. '
-        'Procure o setor Administrativo.',
-      );
+      _showMessage('CNH vencida ou não cadastrada.');
       return;
     }
 
     if (reasonTravel.trim().isEmpty || destination.trim().isEmpty) {
-      _showMessage('Preencha o motivo e o destino da viagem.');
+      _showMessage('Preencha o motivo e o destino.');
+      return;
+    }
+    if (!isValidPlace(destination)) {
+      _showMessage('O destino deve conter só letras.');
       return;
     }
     if (departureDateTime == null || returnDate == null) {
-      _showMessage('Selecione as datas de saída e de retorno.');
+      _showMessage('Selecione a saída e o retorno.');
       return;
     }
     if (returnPeriod == null) {
-      _showMessage('Selecione o período de retorno (manhã ou tarde).');
+      _showMessage('Selecione o período de retorno.');
       return;
     }
 
@@ -133,9 +134,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
     final expiry = user.cnhExpiry;
     if (expiry != null &&
         returnDate!.isAfter(DateTime(expiry.year, expiry.month, expiry.day))) {
-      _showMessage(
-        'Sua CNH vence em ${_fmtDate(expiry)}, antes da data de retorno.',
-      );
+      _showMessage('Sua CNH vence antes do retorno (${_fmtDate(expiry)}).');
       return;
     }
 
@@ -146,10 +145,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
       returnPeriod!.endHour,
     );
     if (!deadline.isAfter(departureDateTime!)) {
-      _showMessage(
-        'O retorno precisa ser depois da saída. '
-        'Verifique a data e o período de retorno.',
-      );
+      _showMessage('O retorno precisa ser depois da saída.');
       return;
     }
 
@@ -161,10 +157,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
       ignoreRequestId: widget.request?.id,
     );
     if (hasConflict) {
-      _showMessage(
-        'Você já tem uma solicitação ativa nesse período. '
-        'Escolha outro horário ou cancele a anterior.',
-      );
+      _showMessage('Você já tem uma solicitação nesse período.');
       return;
     }
 
@@ -186,7 +179,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
         if (!mounted) return;
         _showMessage(
           reverted
-              ? 'Solicitação alterada e retornada para aprovação'
+              ? 'Solicitação enviada para nova aprovação.'
               : 'Solicitação atualizada.',
         );
         Navigator.of(context).pop();
@@ -202,7 +195,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
         returnPeriod: returnPeriod!,
       );
       if (!mounted) return;
-      _showMessage('Solicitação enviada com sucesso!');
+      _showMessage('Solicitação enviada.');
       Navigator.of(context).pushReplacementNamed('/my-requests');
     } on ApiError catch (e) {
       // O servidor confere tudo de novo (conflito, CNH, lotação...).
@@ -239,26 +232,16 @@ class _NewRequestPageState extends State<NewRequestPage> {
         r.passengers != numberPassengers;
   }
 
-  /// Explica o que acontece com a solicitação e o veículo e pede confirmação.
+  /// Pede confirmação antes de tirar a aprovação da solicitação.
   Future<bool> _confirmReapproval() async {
-    final vehicle = RequestController.instance.vehicleOf(widget.request!);
-    final vehicleText = vehicle == null
-        ? 'O veículo alocado será liberado'
-        : 'O veículo ${vehicle.model} (${vehicle.plate}) será liberado';
-
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        icon: const Icon(Icons.info_outline, color: AppColors.canceled),
-        title: const Text('Voltar para aprovação?'),
-        content: Text(
-          'Esta solicitação já foi aprovada. Ao alterar datas, período ou '
-          'passageiros:\n\n'
-          '• ela volta para "Pendente" e precisa de nova aprovação;\n'
-          '• $vehicleText e pode ser reservado por outra pessoa;\n'
-          '• um novo veículo será escolhido pelo Aprovador.\n\n'
-          'Deseja salvar mesmo assim?',
-          style: const TextStyle(fontSize: 14),
+        title: const Text('Enviar para nova aprovação?'),
+        content: const Text(
+          'Ao alterar datas, período ou passageiros, a solicitação precisará '
+          'ser aprovada de novo e o veículo pode mudar.',
+          style: TextStyle(fontSize: 14),
         ),
         actions: [
           TextButton(
@@ -268,7 +251,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
             child: const Text(
-              'Salvar e reenviar',
+              'Salvar',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
           ),
@@ -294,9 +277,8 @@ class _NewRequestPageState extends State<NewRequestPage> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Reagendando a viagem a ${original.destination} '
-              '(solicitação #${original.id}, encerrada). Os dados foram '
-              'copiados: escolha as novas datas.',
+              'Reagendando a viagem a ${original.destination}. '
+              'Escolha as novas datas.',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
           ),
@@ -325,7 +307,11 @@ class _NewRequestPageState extends State<NewRequestPage> {
             return SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                // Largura total: mantém os campos centralizados.
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight,
+                  minWidth: constraints.maxWidth - 40,
+                ),
                 child: IntrinsicHeight(
                   child: KeyedSubtree(
                     key: ValueKey(_formVersion),
@@ -345,14 +331,18 @@ class _NewRequestPageState extends State<NewRequestPage> {
                           label: 'Motivo da viagem',
                           hint: 'Digite o motivo da viagem',
                           inputText: reasonTravel,
+                          inputFormatters: AppFormatters.freeText(200),
+                          textCapitalization: TextCapitalization.sentences,
                           onChanged: (text) =>
                               setState(() => reasonTravel = text),
                         ),
                         const SizedBox(height: 20),
                         InputTextField(
                           label: 'Destino',
-                          hint: 'Informe o destino / rota',
+                          hint: 'Ex.: Macaé / RJ',
                           inputText: destination,
+                          inputFormatters: AppFormatters.place,
+                          textCapitalization: TextCapitalization.words,
                           onChanged: (text) =>
                               setState(() => destination = text),
                         ),
@@ -422,8 +412,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
   /// Aviso exibido quando a CNH impede novas solicitações (regra 5.2.4).
   Widget _cnhBlockedWarning(UserModel user) {
     final message = user.cnhStatus == CnhStatus.vencida
-        ? 'Sua CNH está vencida. Você não pode solicitar veículos até '
-              'regularizar com o setor Administrativo.'
+        ? 'Sua CNH está vencida. Procure o setor Administrativo.'
         : 'Sua CNH não está cadastrada. Procure o setor Administrativo.';
 
     return Container(

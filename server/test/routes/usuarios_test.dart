@@ -1,3 +1,4 @@
+import 'package:dart_frog/dart_frog.dart';
 import 'package:frota_core/frota_core.dart';
 import 'package:frota_server/src/api_exception.dart';
 import 'package:mocktail/mocktail.dart';
@@ -158,6 +159,49 @@ void main() {
         ),
         _apiError(404),
       );
+    });
+  });
+
+  group('DELETE /usuarios/{id}', () {
+    Future<Response> delete(String id) => usuario_route.onRequest(
+      contextFor(
+        jsonRequest('DELETE', '/usuarios/$id'),
+        repository: repository,
+        auth: auth,
+        me: admin,
+      ),
+      id,
+    );
+
+    test('sem histórico: apaga o cadastro e o login → 204', () async {
+      when(() => repository.authIdOf(2)).thenAnswer((_) async => 'uuid-ana');
+      when(() => repository.hasHistory(2)).thenAnswer((_) async => false);
+      when(() => repository.delete(2)).thenAnswer((_) async {});
+      when(() => auth.deleteUser('uuid-ana')).thenAnswer((_) async {});
+
+      final response = await delete('2');
+
+      expect(response.statusCode, 204);
+      verify(() => repository.delete(2)).called(1);
+      verify(() => auth.deleteUser('uuid-ana')).called(1);
+    });
+
+    test('com solicitações: 409, nada é apagado', () async {
+      when(() => repository.authIdOf(2)).thenAnswer((_) async => 'uuid-ana');
+      when(() => repository.hasHistory(2)).thenAnswer((_) async => true);
+
+      await expectLater(() => delete('2'), _apiError(409));
+      verifyNever(() => repository.delete(any()));
+      verifyNever(() => auth.deleteUser(any()));
+    });
+
+    test('não pode excluir a si mesmo → 403', () {
+      expect(() => delete('1'), _apiError(403));
+    });
+
+    test('id inexistente → 404', () {
+      when(() => repository.authIdOf(99)).thenAnswer((_) async => null);
+      expect(() => delete('99'), _apiError(404));
     });
   });
 

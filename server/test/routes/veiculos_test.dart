@@ -65,7 +65,7 @@ void main() {
 
     expect(response.statusCode, 201);
     final json = await response.json() as Map<String, dynamic>;
-    expect(json['plate'], 'ABC1D23');
+    expect(json['plate'], 'ABC-1D23');
     expect(json['status'], 'disponivel');
   });
 
@@ -118,6 +118,56 @@ void main() {
     );
 
     expect(await response.json(), containsPair('releasedRequestIds', [4, 5]));
+  });
+
+  group('DELETE /veiculos/{id}', () {
+    test('sem histórico: exclui → 204', () async {
+      when(() => vehicles.hasHistory(7)).thenAnswer((_) async => false);
+      when(() => vehicles.delete(7)).thenAnswer((_) async => true);
+
+      final response = await veiculo_route.onRequest(
+        contextFor(
+          jsonRequest('DELETE', '/veiculos/7'),
+          me: admin,
+          vehicles: vehicles,
+        ),
+        '7',
+      );
+
+      expect(response.statusCode, 204);
+      verify(() => vehicles.delete(7)).called(1);
+    });
+
+    test('com solicitações: 409, nada é apagado', () async {
+      when(() => vehicles.hasHistory(7)).thenAnswer((_) async => true);
+
+      await expectLater(
+        () => veiculo_route.onRequest(
+          contextFor(
+            jsonRequest('DELETE', '/veiculos/7'),
+            me: admin,
+            vehicles: vehicles,
+          ),
+          '7',
+        ),
+        _apiError(409),
+      );
+      verifyNever(() => vehicles.delete(any()));
+    });
+
+    test('aprovador não exclui → 403', () {
+      expect(
+        () => veiculo_route.onRequest(
+          contextFor(
+            jsonRequest('DELETE', '/veiculos/7'),
+            me: approver,
+            vehicles: vehicles,
+          ),
+          '7',
+        ),
+        _apiError(403),
+      );
+    });
   });
 
   test('GET /veiculos/abc → 404', () {
