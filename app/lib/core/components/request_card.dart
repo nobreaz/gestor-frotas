@@ -166,6 +166,16 @@ class RequestCard extends StatelessWidget {
             ),
           ],
 
+          // Cancelada pelo sistema: explica o motivo.
+          if (request.cancellationReason != null) ...[
+            const SizedBox(height: 10),
+            _banner(
+              color: AppColors.canceled,
+              icon: Icons.event_busy,
+              text: request.cancellationReason!.label,
+            ),
+          ],
+
           if (request.wasReturnedLate) ...[
             const SizedBox(height: 10),
             _banner(

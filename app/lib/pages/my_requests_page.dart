@@ -444,6 +444,44 @@ class MyRequestsPage extends StatelessWidget {
     );
   }
 
+  /// Cancelamento antes da retirada (pendente ou aprovada). Na aprovada,
+  /// avisa que o veículo reservado será liberado.
+  Future<void> _cancel(BuildContext context, RequestModel request) async {
+    final approved = request.status == RequestStatus.aprovada;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancelar solicitação'),
+        content: Text(
+          approved
+              ? 'Tem certeza de que deseja cancelar? O veículo reservado será '
+                    'liberado. Esta ação não poderá ser desfeita.'
+              : 'Tem certeza de que deseja cancelar? Esta ação não poderá '
+                    'ser desfeita.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Voltar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Cancelar solicitação',
+              style: TextStyle(color: AppColors.rejected),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    await runWithFeedback(
+      context,
+      () => RequestController.instance.cancelRequest(request.id),
+      success: 'Solicitação cancelada.',
+    );
+  }
+
   Widget _list(BuildContext context, List<RequestModel> requests) {
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -455,13 +493,7 @@ class MyRequestsPage extends StatelessWidget {
 
         return RequestCard(
           request: request,
-          onCancel: request.status == RequestStatus.pendente
-              ? () => runWithFeedback(
-                  context,
-                  () => RequestController.instance.cancelRequest(request.id),
-                  success: 'Solicitação cancelada.',
-                )
-              : null,
+          onCancel: request.canCancel ? () => _cancel(context, request) : null,
           onEdit: request.canEdit ? () => _edit(context, request) : null,
           onCheckOut: request.status == RequestStatus.aprovada
               ? () => _checkOut(context, request)

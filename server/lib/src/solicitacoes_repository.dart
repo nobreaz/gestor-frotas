@@ -51,6 +51,36 @@ String vehicleHoldsSql(String alias) =>
      OR ($alias.status = 'finalizada'
          AND $alias.check_in_em > now() - interval '2 days'))''';
 
+/// Até quando a solicitação [alias] (pendente ou aprovada, ainda não
+/// retirada) pode acontecer. Depois disso o sistema a cancela:
+/// - normal: até o fim do dia da saída (fuso da empresa), ou até o prazo de
+///   devolução se ele vier antes (viagem curta no mesmo dia);
+/// - depois de "não consegui retirar": até o prazo de devolução, para o
+///   Aprovador ter tempo de alocar outro veículo.
+String expiresAtSql(String alias) =>
+    '''
+    CASE WHEN $alias.falha_retirada_em IS NOT NULL THEN $alias.prazo_retorno
+         ELSE least(
+           $alias.prazo_retorno,
+           ((($alias.saida AT TIME ZONE '$companyTimeZone')::date + 1)::timestamp
+             AT TIME ZONE '$companyTimeZone'))
+    END''';
+
+/// Solicitação encerrada pelo sistema ([SolicitacoesRepository.expireStale]
+/// e [SolicitacoesRepository.cancelActiveOf]).
+typedef ClosedRequest = ({
+  int id,
+  int requesterId,
+  String requester,
+  String destination,
+
+  /// Status antes do cancelamento (pendente ou aprovada).
+  RequestStatus previous,
+
+  /// "Modelo · Placa" do veículo que estava alocado, se havia.
+  String? vehicle,
+});
+
 /// Reserva aprovada cujo veículo ainda está numa viagem atrasada.
 typedef AtRiskRequest = ({
   int id,
@@ -82,7 +112,8 @@ class SolicitacoesRepository {
            s.obs_check_out, s.obs_check_in,
            s.aprovador_id, a.nome AS aprovador, s.decidido_em,
            s.falha_retirada_em, s.falha_retirada_motivo::text AS falha_motivo,
-           s.falha_retirada_obs, s.falha_retirada_veiculo_id
+           s.falha_retirada_obs, s.falha_retirada_veiculo_id,
+           s.cancelamento_motivo::text AS cancelamento_motivo
     FROM solicitacoes s
     JOIN usuarios u ON u.id = s.solicitante_id
     LEFT JOIN usuarios a ON a.id = s.aprovador_id''';
@@ -112,6 +143,7 @@ class SolicitacoesRepository {
     'falha_retirada_obs': 'text',
     'falha_retirada_veiculo_id': 'bigint',
     'alerta_risco_em': 'timestamptz',
+    'cancelamento_motivo': 'motivo_cancelamento',
   };
 
   /// [forUpdate] trava a solicitação até o fim da transação (usar dentro
@@ -386,6 +418,86 @@ class SolicitacoesRepository {
     ];
   }
 
+  /// A solicitação já passou do prazo para acontecer ([expiresAtSql])?
+  Future<bool> isExpired(int id) => _exists(
+    'SELECT 1 FROM solicitacoes s WHERE s.id = @id '
+    'AND now() >= ${expiresAtSql('s')}',
+    {'id': id},
+  );
+
+  /// Cancela as pendentes e aprovadas (não retiradas) que passaram do
+  /// prazo ([expiresAtSql]): pendente → `semAprovacao`, aprovada →
+  /// `naoRetirada` (o veículo fica livre).
+  Future<List<ClosedRequest>> expireStale() => _cancel(
+    where:
+        "s.status IN ('pendente', 'aprovada') "
+        'AND now() >= ${expiresAtSql('s')}',
+    reason:
+        "CASE WHEN alvo.anterior = 'pendente' THEN 'semAprovacao' "
+        "ELSE 'naoRetirada' END",
+    parameters: const {},
+  );
+
+  /// Cancela as pendentes e aprovadas (não retiradas) de [userId] com o
+  /// motivo [reason] (usuário desativado ou com perfil alterado).
+  Future<List<ClosedRequest>> cancelActiveOf(
+    int userId,
+    CancellationReason reason,
+  ) => _cancel(
+    where: "s.solicitante_id = @user AND s.status IN ('pendente', 'aprovada')",
+    reason: '@reason',
+    parameters: {'user': userId, 'reason': reason.name},
+  );
+
+  /// [userId] está com um veículo retirado (em uso)?
+  Future<bool> hasVehicleInUse(int userId) => _exists(
+    'SELECT 1 FROM solicitacoes '
+    "WHERE solicitante_id = @user AND status = 'emUso'",
+    {'user': userId},
+  );
+
+  /// Passa para Cancelada (sem veículo e sem decisão) as solicitações que
+  /// atendem [where] (alias `s`). `SKIP LOCKED`: se outra operação estiver
+  /// mexendo nela agora, fica para a próxima verificação.
+  Future<List<ClosedRequest>> _cancel({
+    required String where,
+    required String reason,
+    required Map<String, Object?> parameters,
+  }) async {
+    final result = await _db.execute(
+      Sql.named('''
+        WITH alvo AS (
+          SELECT s.id, s.status AS anterior,
+                 v.modelo || ' · ' || v.placa AS veiculo
+          FROM solicitacoes s
+          LEFT JOIN veiculos v ON v.id = s.veiculo_id
+          WHERE $where
+          FOR UPDATE OF s SKIP LOCKED
+        )
+        UPDATE solicitacoes s
+        SET status = 'cancelada',
+            cancelamento_motivo = ($reason)::motivo_cancelamento,
+            veiculo_id = NULL, aprovador_id = NULL, decidido_em = NULL,
+            alerta_risco_em = NULL
+        FROM alvo, usuarios u
+        WHERE s.id = alvo.id AND u.id = s.solicitante_id
+        RETURNING s.id, s.solicitante_id, u.nome, s.destino,
+                  alvo.anterior::text, alvo.veiculo'''),
+      parameters: parameters,
+    );
+    return [
+      for (final row in result)
+        (
+          id: row[0]! as int,
+          requesterId: row[1]! as int,
+          requester: row[2]! as String,
+          destination: row[3]! as String,
+          previous: RequestStatus.values.byName(row[4]! as String),
+          vehicle: row[5] as String?,
+        ),
+    ];
+  }
+
   Future<bool> _exists(String sql, Map<String, Object?> parameters) async {
     final result = await _db.execute(
       Sql.named('SELECT EXISTS ($sql)'),
@@ -399,6 +511,7 @@ class SolicitacoesRepository {
     DateTime? local(String key) => (m[key] as DateTime?)?.toLocal();
     final returnDate = m['data_retorno'] as DateTime?;
     final failure = m['falha_motivo'] as String?;
+    final cancellation = m['cancelamento_motivo'] as String?;
 
     return RequestModel(
       id: m['id'] as int,
@@ -431,6 +544,9 @@ class SolicitacoesRepository {
           : PickupFailureReason.values.byName(failure),
       pickupFailureNotes: m['falha_retirada_obs'] as String?,
       pickupFailedVehicleId: m['falha_retirada_veiculo_id'] as int?,
+      cancellationReason: cancellation == null
+          ? null
+          : CancellationReason.values.byName(cancellation),
     );
   }
 }

@@ -147,12 +147,45 @@ class UserController extends ChangeNotifier {
     }
   }
 
-  /// Envia o e-mail de redefinição de senha (se o e-mail existir).
+  /// "Esqueci minha senha", passo 1: o Supabase envia um e-mail com um
+  /// código de recuperação (se o e-mail existir).
   Future<void> sendPasswordReset(String email) async {
     try {
       await _auth.resetPasswordForEmail(email.trim());
     } on AuthException catch (e) {
       throw ApiError(_authMessage(e));
+    }
+  }
+
+  /// "Esqueci minha senha", passo 2: confere o [code] do e-mail, grava a
+  /// nova senha (regra 6.2 já conferida na tela) e entra no app.
+  ///
+  /// O código vale como um login temporário: com ele confirmado, o Supabase
+  /// deixa trocar a senha sem pedir a atual. Funciona em qualquer aparelho
+  /// (não depende de abrir um link no celular).
+  Future<void> resetPasswordWithCode({
+    required String email,
+    required String code,
+    required String newPassword,
+  }) async {
+    try {
+      await _auth.verifyOTP(
+        type: OtpType.recovery,
+        email: email.trim(),
+        token: code.trim(),
+      );
+      await _auth.updateUser(UserAttributes(password: newPassword));
+    } on AuthException catch (e) {
+      throw ApiError(_authMessage(e));
+    }
+
+    // Já entra com a sessão do código. Usuário desativado ou sem cadastro:
+    // a senha foi trocada, mas a sessão é desfeita (mesmo caso do login).
+    try {
+      await _loadMe();
+    } catch (_) {
+      await _auth.signOut();
+      rethrow;
     }
   }
 
@@ -223,6 +256,8 @@ class UserController extends ChangeNotifier {
       case 'over_request_rate_limit':
       case 'over_email_send_rate_limit':
         return 'Muitas tentativas. Aguarde alguns minutos.';
+      case 'otp_expired':
+        return 'Código inválido ou expirado. Peça um novo código.';
       case 'same_password':
         return 'A nova senha precisa ser diferente da atual.';
       case 'weak_password':

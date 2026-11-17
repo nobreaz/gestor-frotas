@@ -5,12 +5,20 @@ import 'package:frota_server/src/api_exception.dart';
 import 'package:frota_server/src/notificacoes_repository.dart';
 import 'package:frota_server/src/request_input.dart';
 import 'package:frota_server/src/solicitacoes_repository.dart';
+import 'package:frota_server/src/usuarios_repository.dart';
 import 'package:frota_server/src/veiculos_repository.dart';
 import 'package:postgres/postgres.dart';
 
-/// Roda o alerta de reservas em risco sem deixar uma falha dele derrubar a
-/// listagem que o chamou (o alerta é um "extra" das rotas de leitura).
-Future<void> alertReservationsAtRiskQuietly(FrotaService frota) async {
+/// Verificações automáticas, rodadas antes das listagens (não há tarefa
+/// agendada): cancela as solicitações que passaram do prazo para acontecer
+/// e avisa as reservas em risco. Uma falha aqui não derruba a listagem que
+/// chamou (as verificações são um "extra" das rotas de leitura).
+Future<void> runAutomaticChecksQuietly(FrotaService frota) async {
+  try {
+    await frota.expireStaleRequests();
+  } on Object catch (e) {
+    stderr.writeln('Falha ao encerrar solicitações vencidas: $e');
+  }
   try {
     await frota.alertReservationsAtRisk();
   } on Object catch (e) {
@@ -23,10 +31,12 @@ class _Tx {
   _Tx(Session tx)
     : requests = SolicitacoesRepository(tx),
       vehicles = VeiculosRepository(tx),
+      users = UsuariosRepository(tx),
       notifications = NotificacoesRepository(tx);
 
   final SolicitacoesRepository requests;
   final VeiculosRepository vehicles;
+  final UsuariosRepository users;
   final NotificacoesRepository notifications;
 
   /// Avisa o solicitante (RF 3.3.7).
@@ -195,16 +205,26 @@ class FrotaService {
     return (await tx.requests.findById(id))!;
   });
 
-  /// Cancelamento pelo solicitante, só enquanto Pendente (RF 3.3.4).
+  /// Cancelamento pelo solicitante (RF 3.3.4), antes da retirada:
+  /// pendente ou aprovada. Cancelar uma aprovada libera o veículo e avisa
+  /// os Aprovadores.
   Future<RequestModel> cancelRequest(UserModel me, int id) => _tx((tx) async {
     final current = await _ownRequest(tx, me, id);
-    if (current.status != RequestStatus.pendente) {
+    if (!current.canCancel) {
       throw const ApiException.conflict(
-        'Só solicitações pendentes podem ser canceladas.',
+        'Só é possível cancelar antes da retirada do veículo.',
       );
     }
 
-    await tx.requests.update(id, {'status': RequestStatus.cancelada});
+    final vehicleId = current.vehicleId;
+    final vehicle = vehicleId == null
+        ? null
+        : await tx.vehicles.findById(vehicleId);
+
+    await tx.requests.update(id, {
+      ..._backToPending,
+      'status': RequestStatus.cancelada,
+    });
     await tx.notify(
       me.id,
       id,
@@ -212,6 +232,15 @@ class FrotaService {
       NotificationType.canceled,
       'Você cancelou esta solicitação.',
     );
+    if (vehicle != null) {
+      await tx.notifyApprovers(
+        id,
+        current.destination,
+        NotificationType.canceled,
+        '${current.requester} cancelou a reserva do '
+        '${vehicle.model} · ${vehicle.plate}. O veículo foi liberado.',
+      );
+    }
     return (await tx.requests.findById(id))!;
   });
 
@@ -220,6 +249,12 @@ class FrotaService {
   Future<RequestModel> approve(UserModel me, int id, int vehicleId) =>
       _tx((tx) async {
         final request = await _pendingRequest(tx, id);
+        if (await tx.requests.isExpired(id)) {
+          throw const ApiException.conflict(
+            'A data de saída já passou. O solicitante precisa fazer uma '
+            'nova solicitação.',
+          );
+        }
 
         final vehicle = await tx.vehicles.findById(vehicleId, forUpdate: true);
         if (vehicle == null) {
@@ -314,6 +349,11 @@ class FrotaService {
     if (request.status != RequestStatus.aprovada) {
       throw const ApiException.conflict(
         'A retirada só pode ser registrada em solicitação aprovada.',
+      );
+    }
+    if (await tx.requests.isExpired(id)) {
+      throw const ApiException.conflict(
+        'O prazo para retirar o veículo terminou. Faça uma nova solicitação.',
       );
     }
 
@@ -454,6 +494,89 @@ class FrotaService {
       );
     }
     return atRisk.length;
+  });
+
+  /// Cancela as solicitações que não podem mais acontecer (revisão final,
+  /// 2026-11-17), com o prazo de [expiresAtSql]:
+  /// - pendente que ninguém aprovou até o fim do dia da saída;
+  /// - aprovada cujo veículo não foi retirado até o fim do dia da saída (o
+  ///   veículo volta a ficar livre e os Aprovadores são avisados).
+  ///
+  /// Assim como o alerta de risco, roda antes das listagens
+  /// ([runAutomaticChecksQuietly]). Devolve quantas foram canceladas.
+  Future<int> expireStaleRequests() => _tx((tx) async {
+    final expired = await tx.requests.expireStale();
+    for (final r in expired) {
+      if (r.previous == RequestStatus.pendente) {
+        await tx.notify(
+          r.requesterId,
+          r.id,
+          r.destination,
+          NotificationType.canceled,
+          'A data de saída passou sem aprovação. Se ainda precisar, faça '
+          'uma nova solicitação.',
+        );
+        continue;
+      }
+      await tx.notify(
+        r.requesterId,
+        r.id,
+        r.destination,
+        NotificationType.canceled,
+        'O veículo não foi retirado no dia da saída e a reserva foi '
+        'cancelada.',
+      );
+      await tx.notifyApprovers(
+        r.id,
+        r.destination,
+        NotificationType.canceled,
+        '${r.requester} não retirou o ${r.vehicle}. A reserva foi cancelada '
+        'e o veículo, liberado.',
+      );
+    }
+    return expired.length;
+  });
+
+  /// Alteração de usuário pelo Administrador que tira dele o direito de
+  /// solicitar (desativar o acesso ou mudar o perfil de Padrão para outro).
+  ///
+  /// - Com veículo em uso: recusa (ele precisa devolver antes).
+  /// - Pendentes e aprovadas dele são canceladas com o motivo [reason]; os
+  ///   Aprovadores são avisados das aprovadas (o veículo foi liberado).
+  ///
+  /// Tudo na mesma transação da alteração do cadastro.
+  Future<UserModel> updateUserClosingRequests(
+    int userId,
+    Map<String, Object?> changes,
+    CancellationReason reason,
+  ) => _tx((tx) async {
+    if (await tx.requests.hasVehicleInUse(userId)) {
+      throw const ApiException.conflict(
+        'Este usuário está com um veículo em uso. Ele precisa registrar a '
+        'devolução antes.',
+      );
+    }
+
+    final why = reason == CancellationReason.usuarioDesativado
+        ? 'acesso desativado'
+        : 'perfil alterado';
+    final closed = await tx.requests.cancelActiveOf(userId, reason);
+    for (final r in closed) {
+      if (r.previous != RequestStatus.aprovada) continue;
+      await tx.notifyApprovers(
+        r.id,
+        r.destination,
+        NotificationType.canceled,
+        'A reserva de ${r.requester} foi cancelada ($why). '
+        'O ${r.vehicle} foi liberado.',
+      );
+    }
+
+    final updated = await tx.users.update(userId, changes);
+    if (updated == null) {
+      throw const ApiException.notFound('Usuário não encontrado.');
+    }
+    return updated;
   });
 
   /// Devolução do veículo (check-in, RF 3.3.6). A km de retorno não pode ser

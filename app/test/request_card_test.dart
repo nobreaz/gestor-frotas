@@ -71,4 +71,26 @@ void main() {
     expect(find.textContaining('Encerrada para reagendamento'), findsOneWidget);
     expect(find.textContaining('Retirada não realizada'), findsNothing);
   });
+
+  testWidgets('cancelada pelo sistema: card explica o motivo', (tester) async {
+    final request = _request(status: RequestStatus.cancelada)
+      ..cancellationReason = CancellationReason.naoRetirada;
+    await tester.pumpWidget(_wrap(RequestCard(request: request)));
+    expect(
+      find.textContaining('o veículo não foi retirado no dia da saída'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('cancelar aparece também na aprovada', (tester) async {
+    final request = _request(status: RequestStatus.aprovada);
+    expect(request.canCancel, isTrue);
+    expect(_request(status: RequestStatus.emUso).canCancel, isFalse);
+    var tapped = false;
+    await tester.pumpWidget(
+      _wrap(RequestCard(request: request, onCancel: () => tapped = true)),
+    );
+    await tester.tap(find.text('Cancelar'));
+    expect(tapped, isTrue);
+  });
 }

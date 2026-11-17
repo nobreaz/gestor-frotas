@@ -14,7 +14,7 @@ Future<Response> onRequest(RequestContext context) async {
     throw const ApiException.methodNotAllowed();
   }
   final me = context.read<UserModel>();
-  await alertReservationsAtRiskQuietly(context.read<FrotaService>());
+  await runAutomaticChecksQuietly(context.read<FrotaService>());
   final items = await context.read<NotificacoesRepository>().listFor(me.id);
   return Response.json(body: [for (final n in items) n.toJson()]);
 }

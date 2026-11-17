@@ -4,8 +4,8 @@ import 'package:frota_server/src/api_exception.dart';
 import 'package:frota_server/src/frota_service.dart';
 import 'package:frota_server/src/middleware.dart';
 
-/// `POST /solicitacoes/{id}/cancelar`: o solicitante cancela enquanto
-/// Pendente (RF 3.3.4). Sem corpo.
+/// `POST /solicitacoes/{id}/cancelar`: o solicitante cancela antes da
+/// retirada, pendente ou aprovada (RF 3.3.4). Sem corpo.
 Future<Response> onRequest(RequestContext context, String id) async {
   if (context.request.method != HttpMethod.post) {
     throw const ApiException.methodNotAllowed();

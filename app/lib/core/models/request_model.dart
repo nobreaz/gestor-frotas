@@ -11,6 +11,8 @@ export 'package:frota_core/frota_core.dart'
         ReturnPeriodX,
         periodsOverlap,
         vehicleFreeFrom,
+        CancellationReason,
+        CancellationReasonX,
         PickupFailureAction,
         PickupFailureReason,
         PickupFailureReasonX,

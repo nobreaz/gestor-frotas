@@ -55,8 +55,8 @@ Future<Response> _list(RequestContext context) async {
   final statuses = _parseStatuses(query['status']);
   final approverId = _parseId(query['aprovadorId'], 'aprovadorId');
 
-  // Antes de listar, avisa reservas cujo veículo ainda não voltou.
-  await alertReservationsAtRiskQuietly(context.read<FrotaService>());
+  // Antes de listar: cancela as vencidas e avisa as reservas em risco.
+  await runAutomaticChecksQuietly(context.read<FrotaService>());
 
   final requests = await context.read<SolicitacoesRepository>().list(
     statuses: statuses,

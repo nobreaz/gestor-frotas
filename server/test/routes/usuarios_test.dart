@@ -119,11 +119,17 @@ void main() {
       );
     });
 
-    test('desativar outro usuário bloqueia o login dele', () async {
+    test('desativar outro usuário bloqueia o login dele e encerra as '
+        'solicitações dele', () async {
+      final frota = MockFrotaService();
       final ana = user(id: 2);
       when(() => repository.findById(2)).thenAnswer((_) async => ana);
       when(
-        () => repository.update(2, {'ativo': false}),
+        () => frota.updateUserClosingRequests(
+          2,
+          {'ativo': false},
+          CancellationReason.usuarioDesativado,
+        ),
       ).thenAnswer((_) async => user(id: 2, active: false));
       when(() => repository.authIdOf(2)).thenAnswer((_) async => 'uuid-ana');
       when(
@@ -135,6 +141,7 @@ void main() {
           jsonRequest('PATCH', '/usuarios/2', {'active': false}),
           repository: repository,
           auth: auth,
+          frota: frota,
           me: admin,
         ),
         '2',
@@ -143,6 +150,55 @@ void main() {
       expect(response.statusCode, 200);
       expect(await response.json(), containsPair('active', false));
       verify(() => auth.setBanned('uuid-ana', banned: true)).called(1);
+      verifyNever(() => repository.update(any(), any()));
+    });
+
+    test('Padrão virando Aprovador encerra as solicitações dele', () async {
+      final frota = MockFrotaService();
+      when(() => repository.findById(2)).thenAnswer((_) async => user(id: 2));
+      when(
+        () => frota.updateUserClosingRequests(
+          2,
+          {'perfil': 'aprovador'},
+          CancellationReason.perfilAlterado,
+        ),
+      ).thenAnswer((_) async => user(id: 2, profile: UserProfile.aprovador));
+
+      final response = await usuario_route.onRequest(
+        contextFor(
+          jsonRequest('PATCH', '/usuarios/2', {'profile': 'aprovador'}),
+          repository: repository,
+          auth: auth,
+          frota: frota,
+          me: admin,
+        ),
+        '2',
+      );
+
+      expect(response.statusCode, 200);
+      expect(await response.json(), containsPair('profile', 'aprovador'));
+    });
+
+    test('alterar só o nome não mexe nas solicitações', () async {
+      final frota = MockFrotaService();
+      when(() => repository.findById(2)).thenAnswer((_) async => user(id: 2));
+      when(
+        () => repository.update(2, {'nome': 'Ana Souza'}),
+      ).thenAnswer((_) async => user(id: 2));
+
+      final response = await usuario_route.onRequest(
+        contextFor(
+          jsonRequest('PATCH', '/usuarios/2', {'name': 'Ana Souza'}),
+          repository: repository,
+          auth: auth,
+          frota: frota,
+          me: admin,
+        ),
+        '2',
+      );
+
+      expect(response.statusCode, 200);
+      verifyZeroInteractions(frota);
     });
 
     test('id inexistente → 404', () {

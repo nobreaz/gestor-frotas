@@ -419,5 +419,35 @@ void main() {
       expect(back.needsReallocation, isFalse);
       expect(PickupFailureReason.outro.requiresNotes, isTrue);
     });
+
+    test('cancelar: só antes da retirada; JSON leva o motivo do sistema', () {
+      final r = RequestModel(
+        id: 1,
+        reason: 'r',
+        destination: 'd',
+        passengers: 1,
+        status: RequestStatus.cancelada,
+        cancellationReason: CancellationReason.semAprovacao,
+      );
+      final back = RequestModel.fromJson(r.toJson());
+      expect(back.cancellationReason, CancellationReason.semAprovacao);
+      expect(
+        RequestModel.fromJson({...r.toJson(), 'cancellationReason': null})
+            .cancellationReason,
+        isNull,
+      );
+
+      for (final (status, can) in [
+        (RequestStatus.pendente, true),
+        (RequestStatus.aprovada, true),
+        (RequestStatus.emUso, false),
+        (RequestStatus.finalizada, false),
+        (RequestStatus.recusada, false),
+        (RequestStatus.cancelada, false),
+      ]) {
+        r.status = status;
+        expect(r.canCancel, can, reason: status.name);
+      }
+    });
   });
 }

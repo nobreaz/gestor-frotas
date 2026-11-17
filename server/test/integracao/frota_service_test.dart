@@ -699,6 +699,15 @@ void main() {
     // Ana está com o gol e deveria ter devolvido há 1 hora (hoje).
     final a = await w.service.createRequest(w.ana, w.trip(days: 5));
     await w.service.approve(w.bruno, a.id, w.gol.id);
+    // Retirou dentro do prazo; depois o prazo passou sem devolução.
+    await moveTo(
+      w,
+      a.id,
+      saida: "now() - interval '5 hours'",
+      prazo: "now() + interval '1 hour'",
+      dataRetorno: "(now() AT TIME ZONE 'America/Sao_Paulo')::date",
+    );
+    await w.service.checkOut(w.ana, a.id, mileage: 3000);
     await moveTo(
       w,
       a.id,
@@ -706,7 +715,6 @@ void main() {
       prazo: "now() - interval '1 hour'",
       dataRetorno: "(now() AT TIME ZONE 'America/Sao_Paulo')::date",
     );
-    await w.service.checkOut(w.ana, a.id, mileage: 3000);
 
     expect(await w.service.alertReservationsAtRisk(), greaterThanOrEqualTo(1));
     expect((await w.notificationTypes(w.caio)).first, NotificationType.atRisk);
@@ -731,6 +739,152 @@ void main() {
     final later = await w.service.createRequest(w.caio, w.trip(days: 9));
     final eligible = await w.service.eligibleVehicles(later.id);
     expect(eligible.map((v) => v.id), isNot(contains(w.gol.id)));
+  });
+
+  // -------------------------------------------------------------------
+  // Revisão final (2026-11-17): cancelamentos
+  // -------------------------------------------------------------------
+
+  const yesterday = "now() - interval '1 day'";
+
+  scenario('cancelar aprovada: libera o veículo e avisa os Aprovadores', (
+    w,
+  ) async {
+    final a = await w.service.createRequest(w.ana, w.trip());
+    await w.service.approve(w.bruno, a.id, w.gol.id);
+
+    final canceled = await w.service.cancelRequest(w.ana, a.id);
+    expect(canceled.status, RequestStatus.cancelada);
+    expect(canceled.vehicleId, isNull);
+    expect(canceled.approverId, isNull);
+    expect(canceled.cancellationReason, isNull); // foi o solicitante
+    expect((await w.notificationTypes(w.ana)).first, NotificationType.canceled);
+    expect(
+      (await w.notificationTypes(w.bruno)).first,
+      NotificationType.canceled,
+    );
+
+    // O gol volta a servir para outra pessoa no mesmo período.
+    final c = await w.service.createRequest(w.caio, w.trip());
+    final approved = await w.service.approve(w.bruno, c.id, w.gol.id);
+    expect(approved.vehicleId, w.gol.id);
+
+    // Em uso não cancela.
+    final d = await w.service.createRequest(w.ana, w.trip(days: 8));
+    await w.service.approve(w.bruno, d.id, w.van.id);
+    await moveTo(w, d.id, saida: tenMinutesAgo);
+    await w.service.checkOut(w.ana, d.id, mileage: 5000);
+    await expectLater(w.service.cancelRequest(w.ana, d.id), _apiError(409));
+  });
+
+  scenario('pendente sem aprovação até o fim do dia da saída é cancelada', (
+    w,
+  ) async {
+    final old = await w.service.createRequest(w.ana, w.trip());
+    await moveTo(w, old.id, saida: yesterday);
+    // Saída hoje, há 10 min: ainda dá para aprovar.
+    final today = await w.service.createRequest(w.caio, w.trip());
+    await moveTo(w, today.id, saida: tenMinutesAgo);
+
+    await expectLater(
+      w.service.approve(w.bruno, old.id, w.gol.id),
+      _apiError(409),
+    );
+
+    await w.service.expireStaleRequests();
+    final expired = (await w.requests.findById(old.id))!;
+    expect(expired.status, RequestStatus.cancelada);
+    expect(expired.cancellationReason, CancellationReason.semAprovacao);
+    expect((await w.notificationTypes(w.ana)).first, NotificationType.canceled);
+
+    final stillPending = (await w.requests.findById(today.id))!;
+    expect(stillPending.status, RequestStatus.pendente);
+    final approved = await w.service.approve(w.bruno, today.id, w.gol.id);
+    expect(approved.status, RequestStatus.aprovada);
+  });
+
+  scenario('aprovada não retirada até o fim do dia da saída é cancelada e '
+      'libera o veículo', (w) async {
+    final a = await w.service.createRequest(w.ana, w.trip());
+    await w.service.approve(w.bruno, a.id, w.gol.id);
+    await moveTo(w, a.id, saida: yesterday);
+
+    // Retirada fora do prazo é recusada.
+    await expectLater(
+      w.service.checkOut(w.ana, a.id, mileage: 3000),
+      _apiError(409),
+    );
+
+    await w.service.expireStaleRequests();
+    final expired = (await w.requests.findById(a.id))!;
+    expect(expired.status, RequestStatus.cancelada);
+    expect(expired.cancellationReason, CancellationReason.naoRetirada);
+    expect(expired.vehicleId, isNull);
+    expect((await w.notificationTypes(w.ana)).first, NotificationType.canceled);
+    expect(
+      (await w.notificationTypes(w.bruno)).first,
+      NotificationType.canceled,
+    );
+
+    // Depois de "não consegui retirar", o prazo vai até a devolução: o
+    // Aprovador ainda pode realocar no dia seguinte.
+    final c = await w.service.createRequest(w.caio, w.trip(days: 4));
+    await w.service.approve(w.bruno, c.id, w.gol.id);
+    await moveTo(w, c.id, saida: tenMinutesAgo);
+    await w.service.reportPickupFailure(
+      w.caio,
+      c.id,
+      reason: PickupFailureReason.problemaVeiculo,
+      action: PickupFailureAction.novoVeiculo,
+    );
+    await moveTo(w, c.id, saida: yesterday);
+    await w.service.expireStaleRequests();
+    expect(
+      (await w.requests.findById(c.id))!.status,
+      RequestStatus.pendente,
+    );
+    final realloc = await w.service.approve(w.bruno, c.id, w.van.id);
+    expect(realloc.status, RequestStatus.aprovada);
+  });
+
+  scenario('desativar usuário cancela as solicitações dele; com veículo em '
+      'uso é recusado', (w) async {
+    final approved = await w.service.createRequest(w.ana, w.trip());
+    await w.service.approve(w.bruno, approved.id, w.gol.id);
+    final pending = await w.service.createRequest(w.ana, w.trip(days: 6));
+
+    final updated = await w.service.updateUserClosingRequests(
+      w.ana.id,
+      {'ativo': false},
+      CancellationReason.usuarioDesativado,
+    );
+    expect(updated.active, isFalse);
+    for (final id in [approved.id, pending.id]) {
+      final r = (await w.requests.findById(id))!;
+      expect(r.status, RequestStatus.cancelada);
+      expect(r.cancellationReason, CancellationReason.usuarioDesativado);
+      expect(r.vehicleId, isNull);
+    }
+    // Só a aprovada avisa os Aprovadores (o veículo foi liberado).
+    expect(
+      (await w.notificationTypes(w.bruno)).first,
+      NotificationType.canceled,
+    );
+
+    // Caio está com o gol na rua: não pode ser desativado.
+    final c = await w.service.createRequest(w.caio, w.trip(days: 9));
+    await w.service.approve(w.bruno, c.id, w.gol.id);
+    await moveTo(w, c.id, saida: tenMinutesAgo);
+    await w.service.checkOut(w.caio, c.id, mileage: 3000);
+    await expectLater(
+      w.service.updateUserClosingRequests(
+        w.caio.id,
+        {'ativo': false},
+        CancellationReason.usuarioDesativado,
+      ),
+      _apiError(409),
+    );
+    expect((await w.users.findById(w.caio.id))!.active, isTrue);
   });
 
   // -------------------------------------------------------------------
