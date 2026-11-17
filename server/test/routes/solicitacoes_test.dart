@@ -8,6 +8,7 @@ import '../helpers.dart';
 
 void main() {
   late MockSolicitacoesRepository requests;
+  late MockFrotaService frota;
 
   final approved = RequestModel(
     id: 1,
@@ -24,6 +25,9 @@ void main() {
 
   setUp(() {
     requests = MockSolicitacoesRepository();
+    frota = MockFrotaService();
+    when(() => frota.expireStaleRequests()).thenAnswer((_) async => 0);
+    when(() => frota.alertReservationsAtRisk()).thenAnswer((_) async => 0);
     when(
       () => requests.list(
         statuses: any(named: 'statuses'),
@@ -35,7 +39,12 @@ void main() {
 
   Future<List<dynamic>> get(String path, UserModel me) async {
     final response = await route.onRequest(
-      contextFor(jsonRequest('GET', path), me: me, requests: requests),
+      contextFor(
+        jsonRequest('GET', path),
+        me: me,
+        requests: requests,
+        frota: frota,
+      ),
     );
     return await response.json() as List<dynamic>;
   }
@@ -75,5 +84,17 @@ void main() {
         isA<ApiException>().having((e) => e.statusCode, 'status', 400),
       ),
     );
+  });
+
+  test('antes de listar, cancela as vencidas e avisa reservas em risco; '
+      'falha nisso não derruba a listagem', () async {
+    when(() => frota.expireStaleRequests()).thenThrow(Exception('x'));
+    when(() => frota.alertReservationsAtRisk()).thenThrow(Exception('x'));
+
+    final body = await get('/solicitacoes', user(id: 9));
+
+    expect(body, hasLength(1));
+    verify(() => frota.expireStaleRequests()).called(1);
+    verify(() => frota.alertReservationsAtRisk()).called(1);
   });
 }

@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:project/core/controllers/notification_controller.dart';
+import 'package:project/core/controllers/report_controller.dart';
+import 'package:project/core/controllers/request_controller.dart';
+import 'package:project/core/controllers/vehicle_controller.dart';
 import 'package:project/core/models/user_model.dart';
 import 'package:project/core/services/api_client.dart';
+import 'package:project/core/services/push_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Login e usuários.
@@ -19,6 +24,12 @@ class UserController extends ChangeNotifier {
   ApiClient get _api => ApiClient.instance;
 
   UserModel? _currentUser;
+
+  /// Último usuário logado. Ao sair, as telas internas ainda ficam montadas
+  /// até a navegação para o login terminar e se redesenham com os dados
+  /// limpos; sem isso, [currentUser] lançaria no meio do build.
+  UserModel? _lastUser;
+
   List<UserModel> _users = [];
 
   /// Estado da lista da Gestão de Usuários.
@@ -29,7 +40,7 @@ class UserController extends ChangeNotifier {
 
   /// Usuário logado. As telas internas só abrem depois do login.
   UserModel get currentUser =>
-      _currentUser ?? (throw StateError('Nenhum usuário logado.'));
+      _currentUser ?? _lastUser ?? (throw StateError('Nenhum usuário logado.'));
 
   /// Usuários carregados por [loadUsers] (só Aprovador).
   List<UserModel> get users => List.unmodifiable(_users);
@@ -75,19 +86,36 @@ class UserController extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    // Antes de apagar a sessão: a API precisa do login para remover o token.
+    await PushService.unregister();
     try {
       await _auth.signOut();
     } on AuthException {
       // Sem rede: a sessão local é apagada mesmo assim.
     }
+    _lastUser = _currentUser ?? _lastUser;
     _currentUser = null;
     _users = [];
+    VehicleController.instance.clear();
+    RequestController.instance.clear();
+    NotificationController.instance.clear();
+    ReportController.instance.clear();
     notifyListeners();
   }
 
   Future<void> _loadMe() async {
     _currentUser = UserModel.fromJson(await _api.get('/me'));
     notifyListeners();
+    refreshAppData();
+    PushService.register(); // sem esperar: não atrasa a entrada no app
+  }
+
+  /// Recarrega frota, solicitações e notificações (sem bloquear a tela:
+  /// cada lista mostra o próprio carregamento).
+  void refreshAppData() {
+    VehicleController.instance.load();
+    RequestController.instance.load();
+    NotificationController.instance.load();
   }
 
   // ---------------------------------------------------------------------
@@ -119,12 +147,45 @@ class UserController extends ChangeNotifier {
     }
   }
 
-  /// Envia o e-mail de redefinição de senha (se o e-mail existir).
+  /// "Esqueci minha senha", passo 1: o Supabase envia um e-mail com um
+  /// código de recuperação (se o e-mail existir).
   Future<void> sendPasswordReset(String email) async {
     try {
       await _auth.resetPasswordForEmail(email.trim());
     } on AuthException catch (e) {
       throw ApiError(_authMessage(e));
+    }
+  }
+
+  /// "Esqueci minha senha", passo 2: confere o [code] do e-mail, grava a
+  /// nova senha (regra 6.2 já conferida na tela) e entra no app.
+  ///
+  /// O código vale como um login temporário: com ele confirmado, o Supabase
+  /// deixa trocar a senha sem pedir a atual. Funciona em qualquer aparelho
+  /// (não depende de abrir um link no celular).
+  Future<void> resetPasswordWithCode({
+    required String email,
+    required String code,
+    required String newPassword,
+  }) async {
+    try {
+      await _auth.verifyOTP(
+        type: OtpType.recovery,
+        email: email.trim(),
+        token: code.trim(),
+      );
+      await _auth.updateUser(UserAttributes(password: newPassword));
+    } on AuthException catch (e) {
+      throw ApiError(_authMessage(e));
+    }
+
+    // Já entra com a sessão do código. Usuário desativado ou sem cadastro:
+    // a senha foi trocada, mas a sessão é desfeita (mesmo caso do login).
+    try {
+      await _loadMe();
+    } catch (_) {
+      await _auth.signOut();
+      rethrow;
     }
   }
 
@@ -170,6 +231,17 @@ class UserController extends ChangeNotifier {
     return updated;
   }
 
+  /// Exclui o cadastro e o login. A API só permite se o usuário não tem
+  /// solicitações (pedidas ou decididas); com histórico, devolve 409.
+  Future<void> deleteUser(int id) async {
+    await _api.delete('/usuarios/$id');
+    _users = [
+      for (final u in _users)
+        if (u.id != id) u,
+    ];
+    notifyListeners();
+  }
+
   static int _byActiveThenName(UserModel a, UserModel b) {
     if (a.active != b.active) return a.active ? -1 : 1;
     return a.name.toLowerCase().compareTo(b.name.toLowerCase());
@@ -180,10 +252,12 @@ class UserController extends ChangeNotifier {
       case 'invalid_credentials':
         return 'E-mail ou senha incorretos.';
       case 'user_banned':
-        return 'Seu acesso está desativado. Procure o Aprovador.';
+        return 'Seu acesso está desativado.';
       case 'over_request_rate_limit':
       case 'over_email_send_rate_limit':
         return 'Muitas tentativas. Aguarde alguns minutos.';
+      case 'otp_expired':
+        return 'Código inválido ou expirado. Peça um novo código.';
       case 'same_password':
         return 'A nova senha precisa ser diferente da atual.';
       case 'weak_password':

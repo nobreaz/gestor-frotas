@@ -1,0 +1,19 @@
+# Site do App Frotas no Caddy do CRM. O atualizar.sh troca DOMINIO_FROTAS
+# pelo endereço real e copia para ~/caddy-sites/frotas.caddy.
+DOMINIO_FROTAS {
+	header Strict-Transport-Security "max-age=31536000"
+
+	# APK para o grupo baixar (enviado pelo publicar.ps1).
+	handle /app.apk {
+		root * /etc/caddy/extra/frotas
+		header Content-Type application/vnd.android.package-archive
+		header Content-Disposition "attachment; filename=\"AppFrotas.apk\""
+		header Cache-Control no-cache
+		file_server
+	}
+
+	handle {
+		encode zstd gzip
+		reverse_proxy frotas-api:8080
+	}
+}

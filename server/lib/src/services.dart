@@ -1,7 +1,13 @@
 import 'package:frota_server/src/config.dart';
+import 'package:frota_server/src/dispositivos_repository.dart';
+import 'package:frota_server/src/frota_service.dart';
+import 'package:frota_server/src/notificacoes_repository.dart';
+import 'package:frota_server/src/push.dart';
+import 'package:frota_server/src/relatorios_repository.dart';
 import 'package:frota_server/src/solicitacoes_repository.dart';
 import 'package:frota_server/src/supabase_auth.dart';
 import 'package:frota_server/src/usuarios_repository.dart';
+import 'package:frota_server/src/veiculos_repository.dart';
 import 'package:postgres/postgres.dart';
 
 /// Objetos de longa duração da API (um por processo).
@@ -32,4 +38,23 @@ class Services {
   late final usuarios = UsuariosRepository(db);
 
   late final solicitacoes = SolicitacoesRepository(db);
+
+  late final veiculos = VeiculosRepository(db);
+
+  late final notificacoes = NotificacoesRepository(db);
+
+  late final relatorios = RelatoriosRepository(db);
+
+  late final dispositivos = DispositivosRepository(db);
+
+  /// Push no celular: só se a conta de serviço do Firebase foi configurada.
+  late final PushDispatcher? push = () {
+    final account = config.firebaseServiceAccount;
+    if (account == null) return null;
+    return PushDispatcher(db, FcmGateway.fromJson(account))..start();
+  }();
+
+  /// Regras de solicitações e veículos (cada operação numa transação).
+  /// Depois de cada operação gravada, dispara o envio dos pushes.
+  late final frota = FrotaService(db, afterCommit: push?.trigger);
 }

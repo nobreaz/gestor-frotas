@@ -1,5 +1,15 @@
-/// Tipos de notificação enviados ao solicitante.
-enum NotificationType { sent, approved, rejected, canceled, reverted }
+/// Tipos de notificação.
+/// - Ao solicitante: sent, approved, rejected, canceled, reverted, atRisk.
+/// - Aos Aprovadores: pickupFailed e atRisk.
+enum NotificationType {
+  sent,
+  approved,
+  rejected,
+  canceled,
+  reverted,
+  pickupFailed,
+  atRisk,
+}
 
 extension NotificationTypeX on NotificationType {
   String get title {
@@ -14,6 +24,10 @@ extension NotificationTypeX on NotificationType {
         return 'Solicitação cancelada';
       case NotificationType.reverted:
         return 'Voltou para aprovação';
+      case NotificationType.pickupFailed:
+        return 'Retirada não realizada';
+      case NotificationType.atRisk:
+        return 'Reserva em risco';
     }
   }
 }
@@ -39,4 +53,28 @@ class AppNotification {
     required this.createdAt,
     this.read = false,
   });
+
+  /// Formato JSON trocado entre a API e o app (`createdAt` em ISO 8601 UTC).
+  factory AppNotification.fromJson(Map<String, dynamic> json) =>
+      AppNotification(
+        id: json['id'] as int,
+        userId: json['userId'] as int,
+        requestId: json['requestId'] as int,
+        type: NotificationType.values.byName(json['type'] as String),
+        destination: json['destination'] as String,
+        message: json['message'] as String,
+        createdAt: DateTime.parse(json['createdAt'] as String).toLocal(),
+        read: json['read'] as bool? ?? false,
+      );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'userId': userId,
+    'requestId': requestId,
+    'type': type.name,
+    'destination': destination,
+    'message': message,
+    'createdAt': createdAt.toUtc().toIso8601String(),
+    'read': read,
+  };
 }

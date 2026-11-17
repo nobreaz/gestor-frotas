@@ -1,3 +1,5 @@
+import 'user.dart' show formatDate;
+
 /// Status operacional do veículo.
 /// (Requisito 3.2.5 e entidade "Veículo" — item 5.1.3 do documento.)
 ///
@@ -60,6 +62,20 @@ ExpiryStatus expiryStatusOf(DateTime? expiry, {DateTime? today}) {
   return ExpiryStatus.valido;
 }
 
+/// A partir de quantos km antes da revisão o veículo entra em alerta.
+const serviceWarningKm = 1000;
+
+/// Situação da revisão pela quilometragem: vencida (chegou ou passou da km
+/// marcada), vencendo (faltam até [serviceWarningKm]), válida ou não
+/// informada. Usa o mesmo enum dos documentos para ter as mesmas cores.
+ExpiryStatus serviceStatusOf(int mileage, int? nextServiceMileage) {
+  if (nextServiceMileage == null) return ExpiryStatus.naoInformado;
+  final remaining = nextServiceMileage - mileage;
+  if (remaining <= 0) return ExpiryStatus.vencido;
+  if (remaining <= serviceWarningKm) return ExpiryStatus.vencendo;
+  return ExpiryStatus.valido;
+}
+
 /// Representa um veículo da frota.
 /// (Entidade "Veículo" — seção 5.1 do documento de requisitos.)
 class VehicleModel {
@@ -78,6 +94,9 @@ class VehicleModel {
   DateTime? licensingExpiry;
   DateTime? insuranceExpiry;
 
+  /// Quilometragem em que a próxima revisão deve ser feita (opcional).
+  int? nextServiceMileage;
+
   VehicleModel({
     required this.id,
     required this.plate,
@@ -91,8 +110,56 @@ class VehicleModel {
     this.status = VehicleStatus.disponivel,
     this.licensingExpiry,
     this.insuranceExpiry,
+    this.nextServiceMileage,
   });
+
+  /// Formato JSON trocado entre a API e o app.
+  /// Vencimentos são só o dia (`AAAA-MM-DD`).
+  factory VehicleModel.fromJson(Map<String, dynamic> json) {
+    DateTime? date(String key) {
+      final v = json[key] as String?;
+      return v == null ? null : DateTime.parse(v);
+    }
+
+    return VehicleModel(
+      id: json['id'] as int,
+      plate: json['plate'] as String,
+      chassis: json['chassis'] as String,
+      model: json['model'] as String,
+      color: json['color'] as String,
+      year: json['year'] as int,
+      seats: json['seats'] as int,
+      mileage: json['mileage'] as int,
+      type: VehicleType.values.byName(json['type'] as String),
+      status: VehicleStatus.values.byName(json['status'] as String),
+      licensingExpiry: date('licensingExpiry'),
+      insuranceExpiry: date('insuranceExpiry'),
+      nextServiceMileage: json['nextServiceMileage'] as int?,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'plate': plate,
+    'chassis': chassis,
+    'model': model,
+    'color': color,
+    'year': year,
+    'seats': seats,
+    'mileage': mileage,
+    'type': type.name,
+    'status': status.name,
+    'licensingExpiry': licensingExpiry == null
+        ? null
+        : formatDate(licensingExpiry!),
+    'insuranceExpiry': insuranceExpiry == null
+        ? null
+        : formatDate(insuranceExpiry!),
+    'nextServiceMileage': nextServiceMileage,
+  };
 
   ExpiryStatus get licensingStatus => expiryStatusOf(licensingExpiry);
   ExpiryStatus get insuranceStatus => expiryStatusOf(insuranceExpiry);
+  ExpiryStatus get serviceStatus =>
+      serviceStatusOf(mileage, nextServiceMileage);
 }

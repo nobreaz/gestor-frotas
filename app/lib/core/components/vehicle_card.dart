@@ -3,18 +3,20 @@ import 'package:project/core/models/vehicle_model.dart';
 import 'package:project/core/theme/app_colors.dart';
 
 /// Card que exibe um veículo na tela "Gestão de Veículos",
-/// com as ações de editar e desativar/reativar.
+/// com as ações de editar, desativar/reativar e excluir.
 /// Sem callbacks (visão do Aprovador), funciona só como leitura.
 class VehicleCard extends StatelessWidget {
   final VehicleModel vehicle;
   final VoidCallback? onEdit;
   final VoidCallback? onToggleActive;
+  final VoidCallback? onDelete;
 
   const VehicleCard({
     super.key,
     required this.vehicle,
     this.onEdit,
     this.onToggleActive,
+    this.onDelete,
   });
 
   bool get _isInactive => vehicle.status == VehicleStatus.inativo;
@@ -118,48 +120,71 @@ class VehicleCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           _expiry('Seguro', vehicle.insuranceExpiry, vehicle.insuranceStatus),
-          if (onEdit != null || onToggleActive != null) ...[
+          if (vehicle.nextServiceMileage != null) ...[
+            const SizedBox(height: 4),
+            _service(),
+          ],
+          if (onEdit != null || onToggleActive != null || onDelete != null) ...[
             const Divider(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                if (onEdit != null)
-                  TextButton.icon(
-                    onPressed: onEdit,
-                    icon: const Icon(
-                      Icons.edit,
-                      size: 16,
-                      color: AppColors.primary,
-                    ),
-                    label: const Text(
-                      'Editar',
-                      style: TextStyle(
+            SizedBox(
+              width: double.infinity,
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                children: [
+                  if (onEdit != null)
+                    TextButton.icon(
+                      onPressed: onEdit,
+                      icon: const Icon(
+                        Icons.edit,
+                        size: 16,
                         color: AppColors.primary,
-                        fontWeight: FontWeight.w700,
+                      ),
+                      label: const Text(
+                        'Editar',
+                        style: TextStyle(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
-                  ),
-                if (onToggleActive != null)
-                  TextButton.icon(
-                    onPressed: onToggleActive,
-                    icon: Icon(
-                      _isInactive ? Icons.restart_alt : Icons.block,
-                      size: 16,
-                      color: _isInactive
-                          ? AppColors.approved
-                          : AppColors.rejected,
-                    ),
-                    label: Text(
-                      _isInactive ? 'Reativar' : 'Desativar',
-                      style: TextStyle(
+                  if (onToggleActive != null)
+                    TextButton.icon(
+                      onPressed: onToggleActive,
+                      icon: Icon(
+                        _isInactive ? Icons.restart_alt : Icons.block,
+                        size: 16,
                         color: _isInactive
                             ? AppColors.approved
                             : AppColors.rejected,
-                        fontWeight: FontWeight.w700,
+                      ),
+                      label: Text(
+                        _isInactive ? 'Reativar' : 'Desativar',
+                        style: TextStyle(
+                          color: _isInactive
+                              ? AppColors.approved
+                              : AppColors.rejected,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                  if (onDelete != null)
+                    TextButton.icon(
+                      onPressed: onDelete,
+                      icon: const Icon(
+                        Icons.delete_outline,
+                        size: 16,
+                        color: AppColors.rejected,
+                      ),
+                      label: const Text(
+                        'Excluir',
+                        style: TextStyle(
+                          color: AppColors.rejected,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ],
         ],
@@ -181,6 +206,33 @@ class VehicleCard extends StatelessWidget {
         Expanded(
           child: Text(
             '$label: ${_fmtDate(date)}$suffix',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: status == ExpiryStatus.valido ? null : status.color,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Revisão pela km: mesmas cores dos vencimentos.
+  Widget _service() {
+    final status = vehicle.serviceStatus;
+    final remaining = vehicle.nextServiceMileage! - vehicle.mileage;
+    final suffix = switch (status) {
+      ExpiryStatus.vencido => ' · atrasada',
+      ExpiryStatus.vencendo => ' · faltam $remaining km',
+      _ => '',
+    };
+    return Row(
+      children: [
+        Icon(Icons.build_outlined, size: 14, color: status.color),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            'Revisão: aos ${vehicle.nextServiceMileage} km$suffix',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,

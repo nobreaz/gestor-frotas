@@ -191,4 +191,263 @@ void main() {
       VehicleStatus.emUso,
     ]);
   });
+
+  test('VehicleModel e AppNotification vão e voltam em JSON', () {
+    final v = VehicleModel(
+      id: 3,
+      plate: 'ABC1D23',
+      chassis: '9BW',
+      model: 'Gol',
+      color: 'Branco',
+      year: 2022,
+      seats: 5,
+      mileage: 1000,
+      type: VehicleType.utilitario,
+      status: VehicleStatus.emManutencao,
+      licensingExpiry: DateTime(2027, 3, 31),
+      insuranceExpiry: DateTime(2027, 6, 10),
+    );
+    final json = v.toJson();
+    expect(json['licensingExpiry'], '2027-03-31');
+    expect(VehicleModel.fromJson(json).toJson(), json);
+
+    final n = AppNotification(
+      id: 1,
+      userId: 2,
+      requestId: 3,
+      type: NotificationType.approved,
+      destination: 'Macaé',
+      message: 'ok',
+      createdAt: DateTime.utc(2026, 11, 10, 11),
+    );
+    expect(AppNotification.fromJson(n.toJson()).toJson(), n.toJson());
+  });
+
+  group('Formatos dos campos', () {
+    test('placa antiga e Mercosul, com ou sem hífen', () {
+      for (final ok in ['ABC-1234', 'abc1d23', 'ABC-1D23', 'ABC 1234']) {
+        expect(isValidPlate(ok), isTrue, reason: ok);
+      }
+      for (final bad in ['AB-1234', 'ABC-12345', 'ABC-DD23', '123-4567', '']) {
+        expect(isValidPlate(bad), isFalse, reason: bad);
+      }
+      expect(normalizePlate('abc 1d23'), 'ABC-1D23');
+      expect(normalizePlate('ABC-1234'), 'ABC-1234');
+    });
+
+    test('só letras (nomes, cargo, setor, cor) e destino', () {
+      expect(isOnlyLetters("João D'Ávila"), isTrue);
+      expect(isOnlyLetters('Ana 2'), isFalse);
+      expect(isOnlyLetters('-Ana'), isFalse);
+      expect(isValidPlace('Rio de Janeiro / RJ'), isTrue);
+      expect(isValidPlace('Rua 7'), isFalse);
+    });
+
+    test('chassi, CNH e telefone', () {
+      expect(isValidChassis('9BWZZZ377VT004251'), isTrue);
+      expect(isValidChassis('9BWZZZ377VT00425O'), isFalse); // letra O
+      expect(isValidCnhNumber('01234567890'), isTrue);
+      expect(isValidCnhNumber('0123456789'), isFalse);
+      for (final ok in ['(22) 99999-0000', '(22) 2222-2222', '2345']) {
+        expect(isValidPhone(ok), isTrue, reason: ok);
+      }
+      for (final bad in ['12', '123456', '(22) 9999-000a', '22 99999 00000']) {
+        expect(isValidPhone(bad), isFalse, reason: bad);
+      }
+    });
+  });
+
+  group('Relatórios', () {
+    final today = DateTime(2026, 10, 20);
+    VehicleModel car({
+      VehicleStatus status = VehicleStatus.disponivel,
+      int? nextService,
+      DateTime? licensing,
+    }) => VehicleModel(
+      id: 1,
+      plate: 'ABC1D23',
+      chassis: '9BW',
+      model: 'Gol',
+      color: 'Branco',
+      year: 2022,
+      seats: 5,
+      mileage: 10000,
+      status: status,
+      licensingExpiry: licensing ?? DateTime(2027, 3, 31),
+      insuranceExpiry: DateTime(2026, 11, 2),
+      nextServiceMileage: nextService,
+    );
+
+    test('revisão: vencida, vencendo (até 1.000 km), válida', () {
+      expect(serviceStatusOf(10000, null), ExpiryStatus.naoInformado);
+      expect(serviceStatusOf(10000, 10000), ExpiryStatus.vencido);
+      expect(serviceStatusOf(10000, 11000), ExpiryStatus.vencendo);
+      expect(serviceStatusOf(10000, 11001), ExpiryStatus.valido);
+    });
+
+    test('alertas do veículo: documentos, revisão e manutenção', () {
+      final alerts = vehicleAlerts(
+        car(
+          status: VehicleStatus.emManutencao,
+          nextService: 9500,
+          licensing: DateTime(2026, 10, 1),
+        ),
+        today: today,
+      );
+      expect(alerts.map((a) => (a.kind, a.critical)), [
+        (AlertKind.licenciamento, true),
+        (AlertKind.seguro, false),
+        (AlertKind.revisao, true),
+        (AlertKind.manutencao, false),
+      ]);
+      expect(alerts[1].message, 'Seguro vence em 02/11/2026');
+    });
+
+    test('veículo inativo não gera alerta', () {
+      expect(
+        vehicleAlerts(car(status: VehicleStatus.inativo), today: today),
+        isEmpty,
+      );
+    });
+
+    test('CNH: só de quem solicita (Padrão ativo)', () {
+      UserModel u(UserProfile p, {bool active = true}) => UserModel(
+        id: 1,
+        name: 'Ana',
+        email: 'a@b.com',
+        role: 'r',
+        department: 'd',
+        profile: p,
+        active: active,
+      );
+      expect(driverAlert(u(UserProfile.padrao))?.kind, AlertKind.cnh);
+      expect(driverAlert(u(UserProfile.aprovador)), isNull);
+      expect(driverAlert(u(UserProfile.padrao, active: false)), isNull);
+    });
+
+    test('FleetReport vai e volta em JSON e calcula as taxas', () {
+      final report = FleetReport(
+        days: 30,
+        granularity: TrendGranularity.week,
+        trips: 4,
+        finishedTrips: 4,
+        lateReturns: 1,
+        requests: 6,
+        statuses: {
+          RequestStatus.finalizada: 4,
+          RequestStatus.recusada: 1,
+          RequestStatus.pendente: 1,
+        },
+        trend: [TrendPoint(start: DateTime(2026, 10, 12), trips: 4)],
+        users: const [
+          RankingEntry(id: 3, label: 'Ana', detail: 'TI', trips: 4, km: 520),
+        ],
+        vehicles: const [RankingEntry(id: 1, label: 'Gol', trips: 0)],
+        departments: const [RankingEntry(label: 'TI', trips: 4, km: 520)],
+        approvers: const [
+          ApproverStats(id: 2, name: 'Bruno', approved: 4, rejected: 1),
+        ],
+        alerts: vehicleAlerts(car(), today: today),
+      );
+
+      final json = report.toJson();
+      expect(FleetReport.fromJson(json).toJson(), json);
+      expect(report.approvalRate, 0.8);
+      expect(report.onTimeRate, 0.75);
+      expect(report.periodLabel, '30 dias');
+      expect(
+        FleetReport.fromJson({...json, 'days': 365}).periodLabel,
+        '12 meses',
+      );
+    });
+  });
+
+  group('Margem de um dia e falha na retirada', () {
+    test('veículo livre à meia-noite do dia seguinte ao retorno', () {
+      expect(vehicleFreeFrom(DateTime(2026, 11, 10)), DateTime(2026, 11, 11));
+      // Virada de mês e de ano.
+      expect(vehicleFreeFrom(DateTime(2026, 11, 30)), DateTime(2026, 12));
+      expect(vehicleFreeFrom(DateTime(2026, 12, 31)), DateTime(2027));
+      final r = RequestModel(
+        id: 1,
+        reason: 'r',
+        destination: 'd',
+        passengers: 1,
+        returnDate: DateTime(2026, 11, 10),
+        returnPeriod: ReturnPeriod.manha,
+      );
+      expect(r.vehicleFreeAt, DateTime(2026, 11, 11));
+    });
+
+    test('pode informar falha só se aprovada e a partir do dia da saída', () {
+      final r = RequestModel(
+        id: 1,
+        reason: 'r',
+        destination: 'd',
+        passengers: 1,
+        departure: DateTime(2026, 11, 10, 8),
+        status: RequestStatus.aprovada,
+      );
+      expect(r.canReportPickupFailure(now: DateTime(2026, 11, 9, 23)), isFalse);
+      expect(
+        r.canReportPickupFailure(now: DateTime(2026, 11, 10, 0, 5)),
+        isTrue,
+      );
+      expect(r.canReportPickupFailure(now: DateTime(2026, 11, 12)), isTrue);
+      r.status = RequestStatus.pendente;
+      expect(r.canReportPickupFailure(now: DateTime(2026, 11, 10, 9)), isFalse);
+    });
+
+    test('JSON leva a falha e needsReallocation vale só em pendente', () {
+      final r = RequestModel(
+        id: 1,
+        reason: 'r',
+        destination: 'd',
+        passengers: 1,
+        pickupFailedAt: DateTime.utc(2026, 11, 10, 11),
+        pickupFailureReason: PickupFailureReason.problemaVeiculo,
+        pickupFailureNotes: 'Pneu furado',
+        pickupFailedVehicleId: 4,
+      );
+      final back = RequestModel.fromJson(r.toJson());
+      expect(back.pickupFailureReason, PickupFailureReason.problemaVeiculo);
+      expect(back.pickupFailureNotes, 'Pneu furado');
+      expect(back.pickupFailedVehicleId, 4);
+      expect(back.pickupFailedAt!.isAtSameMomentAs(r.pickupFailedAt!), isTrue);
+      expect(back.needsReallocation, isTrue);
+      back.status = RequestStatus.aprovada;
+      expect(back.needsReallocation, isFalse);
+      expect(PickupFailureReason.outro.requiresNotes, isTrue);
+    });
+
+    test('cancelar: só antes da retirada; JSON leva o motivo do sistema', () {
+      final r = RequestModel(
+        id: 1,
+        reason: 'r',
+        destination: 'd',
+        passengers: 1,
+        status: RequestStatus.cancelada,
+        cancellationReason: CancellationReason.semAprovacao,
+      );
+      final back = RequestModel.fromJson(r.toJson());
+      expect(back.cancellationReason, CancellationReason.semAprovacao);
+      expect(
+        RequestModel.fromJson({...r.toJson(), 'cancellationReason': null})
+            .cancellationReason,
+        isNull,
+      );
+
+      for (final (status, can) in [
+        (RequestStatus.pendente, true),
+        (RequestStatus.aprovada, true),
+        (RequestStatus.emUso, false),
+        (RequestStatus.finalizada, false),
+        (RequestStatus.recusada, false),
+        (RequestStatus.cancelada, false),
+      ]) {
+        r.status = status;
+        expect(r.canCancel, can, reason: status.name);
+      }
+    });
+  });
 }

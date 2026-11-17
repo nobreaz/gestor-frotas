@@ -1,3 +1,4 @@
+import 'package:dart_frog/dart_frog.dart';
 import 'package:frota_core/frota_core.dart';
 import 'package:frota_server/src/api_exception.dart';
 import 'package:mocktail/mocktail.dart';
@@ -118,11 +119,17 @@ void main() {
       );
     });
 
-    test('desativar outro usuário bloqueia o login dele', () async {
+    test('desativar outro usuário bloqueia o login dele e encerra as '
+        'solicitações dele', () async {
+      final frota = MockFrotaService();
       final ana = user(id: 2);
       when(() => repository.findById(2)).thenAnswer((_) async => ana);
       when(
-        () => repository.update(2, {'ativo': false}),
+        () => frota.updateUserClosingRequests(
+          2,
+          {'ativo': false},
+          CancellationReason.usuarioDesativado,
+        ),
       ).thenAnswer((_) async => user(id: 2, active: false));
       when(() => repository.authIdOf(2)).thenAnswer((_) async => 'uuid-ana');
       when(
@@ -134,6 +141,7 @@ void main() {
           jsonRequest('PATCH', '/usuarios/2', {'active': false}),
           repository: repository,
           auth: auth,
+          frota: frota,
           me: admin,
         ),
         '2',
@@ -142,6 +150,55 @@ void main() {
       expect(response.statusCode, 200);
       expect(await response.json(), containsPair('active', false));
       verify(() => auth.setBanned('uuid-ana', banned: true)).called(1);
+      verifyNever(() => repository.update(any(), any()));
+    });
+
+    test('Padrão virando Aprovador encerra as solicitações dele', () async {
+      final frota = MockFrotaService();
+      when(() => repository.findById(2)).thenAnswer((_) async => user(id: 2));
+      when(
+        () => frota.updateUserClosingRequests(
+          2,
+          {'perfil': 'aprovador'},
+          CancellationReason.perfilAlterado,
+        ),
+      ).thenAnswer((_) async => user(id: 2, profile: UserProfile.aprovador));
+
+      final response = await usuario_route.onRequest(
+        contextFor(
+          jsonRequest('PATCH', '/usuarios/2', {'profile': 'aprovador'}),
+          repository: repository,
+          auth: auth,
+          frota: frota,
+          me: admin,
+        ),
+        '2',
+      );
+
+      expect(response.statusCode, 200);
+      expect(await response.json(), containsPair('profile', 'aprovador'));
+    });
+
+    test('alterar só o nome não mexe nas solicitações', () async {
+      final frota = MockFrotaService();
+      when(() => repository.findById(2)).thenAnswer((_) async => user(id: 2));
+      when(
+        () => repository.update(2, {'nome': 'Ana Souza'}),
+      ).thenAnswer((_) async => user(id: 2));
+
+      final response = await usuario_route.onRequest(
+        contextFor(
+          jsonRequest('PATCH', '/usuarios/2', {'name': 'Ana Souza'}),
+          repository: repository,
+          auth: auth,
+          frota: frota,
+          me: admin,
+        ),
+        '2',
+      );
+
+      expect(response.statusCode, 200);
+      verifyZeroInteractions(frota);
     });
 
     test('id inexistente → 404', () {
@@ -158,6 +215,49 @@ void main() {
         ),
         _apiError(404),
       );
+    });
+  });
+
+  group('DELETE /usuarios/{id}', () {
+    Future<Response> delete(String id) => usuario_route.onRequest(
+      contextFor(
+        jsonRequest('DELETE', '/usuarios/$id'),
+        repository: repository,
+        auth: auth,
+        me: admin,
+      ),
+      id,
+    );
+
+    test('sem histórico: apaga o cadastro e o login → 204', () async {
+      when(() => repository.authIdOf(2)).thenAnswer((_) async => 'uuid-ana');
+      when(() => repository.hasHistory(2)).thenAnswer((_) async => false);
+      when(() => repository.delete(2)).thenAnswer((_) async {});
+      when(() => auth.deleteUser('uuid-ana')).thenAnswer((_) async {});
+
+      final response = await delete('2');
+
+      expect(response.statusCode, 204);
+      verify(() => repository.delete(2)).called(1);
+      verify(() => auth.deleteUser('uuid-ana')).called(1);
+    });
+
+    test('com solicitações: 409, nada é apagado', () async {
+      when(() => repository.authIdOf(2)).thenAnswer((_) async => 'uuid-ana');
+      when(() => repository.hasHistory(2)).thenAnswer((_) async => true);
+
+      await expectLater(() => delete('2'), _apiError(409));
+      verifyNever(() => repository.delete(any()));
+      verifyNever(() => auth.deleteUser(any()));
+    });
+
+    test('não pode excluir a si mesmo → 403', () {
+      expect(() => delete('1'), _apiError(403));
+    });
+
+    test('id inexistente → 404', () {
+      when(() => repository.authIdOf(99)).thenAnswer((_) async => null);
+      expect(() => delete('99'), _apiError(404));
     });
   });
 

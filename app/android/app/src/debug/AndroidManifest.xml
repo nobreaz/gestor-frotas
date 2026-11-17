@@ -4,4 +4,6 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Permite HTTP (sem TLS) para a API local (dart_frog dev) apenas em debug. -->
+    <application android:usesCleartextTraffic="true"/>
 </manifest>

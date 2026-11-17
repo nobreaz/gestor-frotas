@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:project/core/components/load_state.dart';
 import 'package:project/core/components/pending_request_card.dart';
 import 'package:project/core/components/request_card.dart';
 import 'package:project/core/controllers/request_controller.dart';
 import 'package:project/core/controllers/user_controller.dart';
+import 'package:project/core/controllers/vehicle_controller.dart';
 import 'package:project/core/models/request_model.dart';
 import 'package:project/core/models/vehicle_model.dart';
+import 'package:project/core/services/api_client.dart';
+import 'package:project/core/services/feedback.dart';
 import 'package:project/core/theme/app_colors.dart';
+import 'package:project/core/utils/input_formatters.dart';
 
 /// Tela do aprovador, em abas:
 /// - Pendentes: aprovar (alocando um veículo) ou recusar (com justificativa).
@@ -26,14 +31,19 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
   /// Fluxo de aprovação: o aprovador escolhe o veículo a alocar.
   /// A lista já vem filtrada e ordenada pela regra RN 4.1.
   Future<void> _approve(BuildContext context, RequestModel request) async {
-    final eligible = RequestController.instance.eligibleVehicles(request);
+    final List<VehicleModel> eligible;
+    try {
+      eligible = await RequestController.instance.eligibleVehicles(request);
+    } on ApiError catch (e) {
+      if (context.mounted) showSnack(context, e.details);
+      return;
+    }
+    if (!context.mounted) return;
 
     if (eligible.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Nenhum veículo disponível atende aos critérios desta solicitação.',
-          ),
+          content: Text('Nenhum veículo disponível para esta solicitação.'),
         ),
       );
       return;
@@ -49,17 +59,12 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
           _VehiclePicker(vehicles: eligible, passengers: request.passengers),
     );
 
-    if (selected == null) return;
+    if (selected == null || !context.mounted) return;
 
-    RequestController.instance.approveRequest(request.id, selected.id);
-
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Solicitação #${request.id} aprovada — veículo ${selected.plate}.',
-        ),
-      ),
+    await runWithFeedback(
+      context,
+      () => RequestController.instance.approveRequest(request.id, selected.id),
+      success: 'Solicitação aprovada (${selected.plate}).',
     );
   }
 
@@ -76,7 +81,7 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Informe o motivo da recusa. A justificativa é obrigatória.',
+              'Informe o motivo da recusa.',
               style: TextStyle(fontSize: 13, color: AppColors.textMuted),
             ),
             const SizedBox(height: 12),
@@ -84,6 +89,8 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
               controller: controller,
               maxLines: 3,
               autofocus: true,
+              inputFormatters: AppFormatters.freeText(),
+              textCapitalization: TextCapitalization.sentences,
               decoration: InputDecoration(
                 hintText: 'Ex.: nenhum veículo disponível na data.',
                 border: OutlineInputBorder(
@@ -113,14 +120,20 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
       ),
     );
 
-    if (justification == null) return;
+    if (justification == null || !context.mounted) return;
 
-    RequestController.instance.rejectRequest(request.id, justification);
-
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Solicitação #${request.id} recusada.')),
+    await runWithFeedback(
+      context,
+      () => RequestController.instance.rejectRequest(request.id, justification),
+      success: 'Solicitação recusada.',
     );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    RequestController.instance.load();
+    VehicleController.instance.load();
   }
 
   @override
@@ -163,16 +176,30 @@ class _PendingRequestsPageState extends State<PendingRequestsPage> {
   }
 
   Widget _pendingTab() {
-    final pending = RequestController.instance.pendingRequests;
+    final controller = RequestController.instance;
+    final pending = controller.pendingRequests;
     if (pending.isEmpty) {
-      return _emptyState(
-        icon: Icons.task_alt,
-        title: 'Nenhuma solicitação pendente',
-        subtitle: 'Tudo em dia por aqui.',
+      return LoadState(
+        loading: controller.loading,
+        error: controller.error,
+        onRetry: controller.load,
+        empty: _emptyState(
+          icon: Icons.task_alt,
+          title: 'Nenhuma solicitação pendente',
+          subtitle: 'Tudo em dia por aqui.',
+        ),
       );
     }
 
+    return RefreshIndicator(
+      onRefresh: controller.load,
+      child: _pendingList(pending),
+    );
+  }
+
+  Widget _pendingList(List<RequestModel> pending) {
     return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(20),
       itemCount: pending.length,
       separatorBuilder: (_, _) => const SizedBox(height: 16),

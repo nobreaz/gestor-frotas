@@ -3,6 +3,7 @@ import 'package:project/app_widget.dart';
 import 'package:project/core/config/app_config.dart';
 import 'package:project/core/controllers/user_controller.dart';
 import 'package:project/core/services/api_client.dart';
+import 'package:project/core/services/push_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 Future<void> main() async {
@@ -18,6 +19,9 @@ Future<void> main() async {
     publishableKey: AppConfig.supabasePublishableKey,
   );
 
+  // Push no celular (só Android; sem Firebase o app segue sem push).
+  await PushService.init();
+
   // Sessão expirada ou revogada (ex.: usuário desativado): volta ao login.
   ApiClient.instance.onUnauthorized = () async {
     if (!UserController.instance.isLoggedIn) return;
@@ -30,6 +34,13 @@ Future<void> main() async {
 
   final loggedIn = await UserController.instance.restoreSession();
   runApp(AppWidget(initialRoute: loggedIn ? '/home' : '/'));
+
+  // Aberto tocando numa notificação: vai direto para as Notificações.
+  if (loggedIn) {
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => PushService.openFromLaunchNotification(),
+    );
+  }
 }
 
 /// Aparece quando o app foi aberto sem o arquivo de configuração.

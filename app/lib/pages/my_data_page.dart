@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:frota_core/frota_core.dart' show isValidPhone;
 import 'package:project/core/controllers/user_controller.dart';
 import 'package:project/core/models/user_model.dart';
 import 'package:project/core/services/api_client.dart';
 import 'package:project/core/theme/app_colors.dart';
+import 'package:project/core/utils/input_formatters.dart';
 
 /// Tela "Meus dados" — informações do usuário logado (seção 5.2).
 /// Quase toda de leitura: só o telefone pode ser editado.
@@ -15,31 +17,49 @@ class MyDataPage extends StatelessWidget {
       d == null ? '—' : '${_pad(d.day)}/${_pad(d.month)}/${d.year}';
 
   Future<void> _editPhone(BuildContext context, UserModel user) async {
-    final controller = TextEditingController(text: user.phone ?? '');
+    final controller = TextEditingController(
+      text: PhoneInputFormatter.formatPhone(
+        (user.phone ?? '').replaceAll(RegExp('[^0-9]'), ''),
+      ),
+    );
+    String? errorText;
 
     final result = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Telefone / ramal'),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.phone,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: 'Ex.: (22) 99999-0000',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Telefone / ramal'),
+          content: TextField(
+            controller: controller,
+            keyboardType: TextInputType.phone,
+            inputFormatters: AppFormatters.phone,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: 'Ex.: (22) 99999-0000',
+              errorText: errorText,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancelar'),
+            ),
+            TextButton(
+              onPressed: () {
+                final text = controller.text;
+                if (text.isNotEmpty && !isValidPhone(text)) {
+                  setDialogState(() => errorText = 'Telefone inválido.');
+                  return;
+                }
+                Navigator.of(dialogContext).pop(text);
+              },
+              child: const Text('Salvar'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
-            child: const Text('Salvar'),
-          ),
-        ],
       ),
     );
 
@@ -119,8 +139,8 @@ class MyDataPage extends StatelessWidget {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Para alterar nome, cargo, CNH ou perfil, procure o '
-                      'setor Administrativo.',
+                      'Para alterar outros dados, procure o setor '
+                      'Administrativo.',
                       style: TextStyle(
                         fontSize: 12,
                         color: AppColors.textMuted,
@@ -206,14 +226,9 @@ class MyDataPage extends StatelessWidget {
       case CnhStatus.valida:
         message = 'Válida até ${_fmtDate(user.cnhExpiry)}';
       case CnhStatus.vencendo:
-        message = days == 0
-            ? 'Vence hoje. Renove para continuar solicitando veículos.'
-            : 'Vence em $days dia(s). Renove para continuar '
-                  'solicitando veículos.';
+        message = days == 0 ? 'Vence hoje.' : 'Vence em $days dia(s).';
       case CnhStatus.vencida:
-        message =
-            'Vencida desde ${_fmtDate(user.cnhExpiry)}. Você não pode '
-            'solicitar veículos até regularizar.';
+        message = 'Vencida desde ${_fmtDate(user.cnhExpiry)}.';
       case CnhStatus.naoInformada:
         message = 'CNH não cadastrada. Procure o setor Administrativo.';
     }

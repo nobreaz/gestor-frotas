@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:frota_core/frota_core.dart' show isValidPlace;
 import 'package:project/core/components/app_button_variant.dart';
 import 'package:project/core/components/input_text_field.dart';
 import 'package:project/core/controllers/request_controller.dart';
@@ -8,14 +9,20 @@ import 'package:project/core/controllers/vehicle_controller.dart';
 import 'package:project/core/models/request_model.dart';
 import 'package:project/core/models/user_model.dart';
 import 'package:project/core/models/vehicle_model.dart';
+import 'package:project/core/services/api_client.dart';
 import 'package:project/core/theme/app_colors.dart';
 import 'package:project/core/theme/app_text_styles.dart';
+import 'package:project/core/utils/input_formatters.dart';
 
 class NewRequestPage extends StatefulWidget {
   /// Quando informado, a tela funciona em modo de edição.
   final RequestModel? request;
 
-  const NewRequestPage({super.key, this.request});
+  /// Reagendamento: nova solicitação com motivo, destino e passageiros
+  /// copiados desta (a original foi encerrada); só as datas ficam vazias.
+  final RequestModel? copyFrom;
+
+  const NewRequestPage({super.key, this.request, this.copyFrom});
 
   @override
   State<NewRequestPage> createState() => _NewRequestPageState();
@@ -45,6 +52,12 @@ class _NewRequestPageState extends State<NewRequestPage> {
       departureDateTime = r.departure;
       returnDate = r.returnDate;
       returnPeriod = r.returnPeriod;
+    }
+    final copy = widget.copyFrom;
+    if (r == null && copy != null) {
+      reasonTravel = copy.reason;
+      destination = copy.destination;
+      numberPassengers = copy.passengers;
     }
   }
 
@@ -81,36 +94,39 @@ class _NewRequestPageState extends State<NewRequestPage> {
     });
   }
 
-  void _submit() {
+  /// Evita enviar duas vezes enquanto espera a resposta da API.
+  bool _sending = false;
+
+  Future<void> _submit() async {
+    if (_sending) return;
     final user = UserController.instance.currentUser;
 
     // Segregação de funções: só o perfil Padrão solicita veículo.
     if (!user.profile.canRequest) {
-      _showMessage(
-        'É necessário ter o perfil Padrão para solicitar veículos. Perfil atual: ${user.profile.label}.',
-      );
+      _showMessage('Apenas o perfil Padrão pode solicitar veículos.');
       return;
     }
 
     // Regra 5.2.4: CNH vencida ou não cadastrada não pode solicitar.
     if (!user.hasValidCnh) {
-      _showMessage(
-        'Sua CNH está vencida ou não cadastrada. '
-        'Procure o setor Administrativo.',
-      );
+      _showMessage('CNH vencida ou não cadastrada.');
       return;
     }
 
     if (reasonTravel.trim().isEmpty || destination.trim().isEmpty) {
-      _showMessage('Preencha o motivo e o destino da viagem.');
+      _showMessage('Preencha o motivo e o destino.');
+      return;
+    }
+    if (!isValidPlace(destination)) {
+      _showMessage('O destino deve conter só letras.');
       return;
     }
     if (departureDateTime == null || returnDate == null) {
-      _showMessage('Selecione as datas de saída e de retorno.');
+      _showMessage('Selecione a saída e o retorno.');
       return;
     }
     if (returnPeriod == null) {
-      _showMessage('Selecione o período de retorno (manhã ou tarde).');
+      _showMessage('Selecione o período de retorno.');
       return;
     }
 
@@ -118,9 +134,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
     final expiry = user.cnhExpiry;
     if (expiry != null &&
         returnDate!.isAfter(DateTime(expiry.year, expiry.month, expiry.day))) {
-      _showMessage(
-        'Sua CNH vence em ${_fmtDate(expiry)}, antes da data de retorno.',
-      );
+      _showMessage('Sua CNH vence antes do retorno (${_fmtDate(expiry)}).');
       return;
     }
 
@@ -131,10 +145,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
       returnPeriod!.endHour,
     );
     if (!deadline.isAfter(departureDateTime!)) {
-      _showMessage(
-        'O retorno precisa ser depois da saída. '
-        'Verifique a data e o período de retorno.',
-      );
+      _showMessage('O retorno precisa ser depois da saída.');
       return;
     }
 
@@ -146,16 +157,36 @@ class _NewRequestPageState extends State<NewRequestPage> {
       ignoreRequestId: widget.request?.id,
     );
     if (hasConflict) {
-      _showMessage(
-        'Você já tem uma solicitação ativa nesse período. '
-        'Escolha outro horário ou cancele a anterior.',
-      );
+      _showMessage('Você já tem uma solicitação nesse período.');
       return;
     }
 
-    if (_isEditing) {
-      final reverted = RequestController.instance.updateRequest(
-        widget.request!.id,
+    if (_losesApproval && !await _confirmReapproval()) return;
+    if (!mounted) return;
+
+    setState(() => _sending = true);
+    try {
+      if (_isEditing) {
+        final reverted = await RequestController.instance.updateRequest(
+          widget.request!.id,
+          reason: reasonTravel.trim(),
+          destination: destination.trim(),
+          passengers: numberPassengers,
+          departure: departureDateTime!,
+          returnDate: returnDate!,
+          returnPeriod: returnPeriod!,
+        );
+        if (!mounted) return;
+        _showMessage(
+          reverted
+              ? 'Solicitação enviada para nova aprovação.'
+              : 'Solicitação atualizada.',
+        );
+        Navigator.of(context).pop();
+        return;
+      }
+
+      await RequestController.instance.addRequest(
         reason: reasonTravel.trim(),
         destination: destination.trim(),
         passengers: numberPassengers,
@@ -163,37 +194,102 @@ class _NewRequestPageState extends State<NewRequestPage> {
         returnDate: returnDate!,
         returnPeriod: returnPeriod!,
       );
-      _showMessage(
-        reverted
-            ? 'Solicitação alterada e retornada para aprovação'
-            : 'Solicitação atualizada.',
-      );
-      Navigator.of(context).pop();
-      return;
+      if (!mounted) return;
+      _showMessage('Solicitação enviada.');
+      Navigator.of(context).pushReplacementNamed('/my-requests');
+    } on ApiError catch (e) {
+      // O servidor confere tudo de novo (conflito, CNH, lotação...).
+      if (mounted) _showMessage(e.details);
+    } finally {
+      if (mounted) setState(() => _sending = false);
     }
-
-    RequestController.instance.addRequest(
-      reason: reasonTravel.trim(),
-      destination: destination.trim(),
-      passengers: numberPassengers,
-      departure: departureDateTime,
-      returnDate: returnDate,
-      returnPeriod: returnPeriod,
-    );
-
-    _showMessage('Solicitação enviada com sucesso!');
-    Navigator.of(context).pushReplacementNamed('/my-requests');
   }
 
   void _showMessage(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  /// A edição tira a aprovação? Só se já estava aprovada e mudaram datas,
+  /// período ou passageiros (motivo e destino mantêm o veículo).
+  bool get _losesApproval {
+    final r = widget.request;
+    if (r == null || r.status != RequestStatus.aprovada) return false;
+
+    bool sameDay(DateTime? a, DateTime? b) =>
+        a != null &&
+        b != null &&
+        a.year == b.year &&
+        a.month == b.month &&
+        a.day == b.day;
+    final sameDeparture =
+        r.departure != null &&
+        departureDateTime != null &&
+        r.departure!.isAtSameMomentAs(departureDateTime!);
+
+    return !sameDeparture ||
+        !sameDay(r.returnDate, returnDate) ||
+        r.returnPeriod != returnPeriod ||
+        r.passengers != numberPassengers;
+  }
+
+  /// Pede confirmação antes de tirar a aprovação da solicitação.
+  Future<bool> _confirmReapproval() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Enviar para nova aprovação?'),
+        content: const Text(
+          'Ao alterar datas, período ou passageiros, a solicitação precisará '
+          'ser aprovada de novo e o veículo pode mudar.',
+          style: TextStyle(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Salvar',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  /// Aviso no topo quando a tela abre para reagendar uma viagem.
+  Widget _rescheduleNotice(RequestModel original) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.canceled.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.event_repeat, size: 20, color: AppColors.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Reagendando a viagem a ${original.destination}. '
+              'Escolha as novas datas.',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = UserController.instance.currentUser;
-    final isApprovedEdit =
-        _isEditing && widget.request!.status == RequestStatus.aprovada;
 
     return Scaffold(
       appBar: AppBar(
@@ -211,7 +307,11 @@ class _NewRequestPageState extends State<NewRequestPage> {
             return SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                // Largura total: mantém os campos centralizados.
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight,
+                  minWidth: constraints.maxWidth - 40,
+                ),
                 child: IntrinsicHeight(
                   child: KeyedSubtree(
                     key: ValueKey(_formVersion),
@@ -219,27 +319,30 @@ class _NewRequestPageState extends State<NewRequestPage> {
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         const SizedBox(height: 20),
-                        if (user.profile.canRequest &&
-                            !user.hasValidCnh) ...[
-                          _cnhBlockedWarning(user),
-                          const SizedBox(height: 10),
+                        if (widget.copyFrom != null) ...[
+                          _rescheduleNotice(widget.copyFrom!),
+                          const SizedBox(height: 16),
                         ],
-                        if (isApprovedEdit) ...[
-                          _approvalWarning(),
+                        if (user.profile.canRequest && !user.hasValidCnh) ...[
+                          _cnhBlockedWarning(user),
                           const SizedBox(height: 10),
                         ],
                         InputTextField(
                           label: 'Motivo da viagem',
                           hint: 'Digite o motivo da viagem',
                           inputText: reasonTravel,
+                          inputFormatters: AppFormatters.freeText(200),
+                          textCapitalization: TextCapitalization.sentences,
                           onChanged: (text) =>
                               setState(() => reasonTravel = text),
                         ),
                         const SizedBox(height: 20),
                         InputTextField(
                           label: 'Destino',
-                          hint: 'Informe o destino / rota',
+                          hint: 'Ex.: Macaé / RJ',
                           inputText: destination,
+                          inputFormatters: AppFormatters.place,
+                          textCapitalization: TextCapitalization.words,
                           onChanged: (text) =>
                               setState(() => destination = text),
                         ),
@@ -275,7 +378,9 @@ class _NewRequestPageState extends State<NewRequestPage> {
                           child: Column(
                             children: [
                               AppButton(
-                                label: _isEditing
+                                label: _sending
+                                    ? 'Enviando...'
+                                    : _isEditing
                                     ? 'Salvar alterações'
                                     : 'Confirmar',
                                 onPressed: _submit,
@@ -307,8 +412,7 @@ class _NewRequestPageState extends State<NewRequestPage> {
   /// Aviso exibido quando a CNH impede novas solicitações (regra 5.2.4).
   Widget _cnhBlockedWarning(UserModel user) {
     final message = user.cnhStatus == CnhStatus.vencida
-        ? 'Sua CNH está vencida. Você não pode solicitar veículos até '
-              'regularizar com o setor Administrativo.'
+        ? 'Sua CNH está vencida. Procure o setor Administrativo.'
         : 'Sua CNH não está cadastrada. Procure o setor Administrativo.';
 
     return Container(
@@ -327,33 +431,6 @@ class _NewRequestPageState extends State<NewRequestPage> {
             child: Text(
               message,
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Aviso exibido ao editar uma solicitação já aprovada.
-  Widget _approvalWarning() {
-    return Container(
-      width: MediaQuery.of(context).size.width * 0.8,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.canceled.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: const Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.info_outline, size: 18, color: AppColors.canceled),
-          SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Esta solicitação já foi aprovada. Alterar datas, período ou '
-              'passageiros fará ela voltar para aprovação e o veículo será '
-              'liberado.',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
           ),
         ],

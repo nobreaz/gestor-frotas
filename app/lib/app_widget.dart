@@ -10,6 +10,7 @@ import 'package:project/pages/my_requests_page.dart';
 import 'package:project/pages/new_request_page.dart';
 import 'package:project/pages/notifications_page.dart';
 import 'package:project/pages/pending_requests_page.dart';
+import 'package:project/pages/reports_page.dart';
 import 'package:project/pages/reset_password_page.dart';
 import 'package:project/pages/settings_page.dart';
 import 'package:project/pages/users_page.dart';
@@ -24,6 +25,9 @@ class AppWidget extends StatelessWidget {
   /// Permite navegar de fora das telas (ex.: sessão expirou → login).
   static final navigatorKey = GlobalKey<NavigatorState>();
 
+  /// Permite mostrar avisos de fora das telas (ex.: push com o app aberto).
+  static final messengerKey = GlobalKey<ScaffoldMessengerState>();
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -31,6 +35,7 @@ class AppWidget extends StatelessWidget {
       builder: (context, child) {
         return MaterialApp(
           navigatorKey: navigatorKey,
+          scaffoldMessengerKey: messengerKey,
           theme: ThemeData(
             primarySwatch: Colors.blue,
             fontFamily: AppTextStyles.fontFamily, // Instrument Sans no app todo
@@ -66,5 +71,6 @@ class AppWidget extends StatelessWidget {
     '/change-password': (context) => const ChangePasswordPage(),
     '/notifications': (context) => const NotificationsPage(),
     '/my-data': (context) => const MyDataPage(),
+    '/reports': (context) => const ReportsPage(),
   };
 }

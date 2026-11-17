@@ -1,5 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:frota_core/frota_core.dart' show PasswordRules, formatDate;
+import 'package:flutter/services.dart';
+import 'package:frota_core/frota_core.dart'
+    show
+        PasswordRules,
+        formatDate,
+        isOnlyLetters,
+        isValidCnhNumber,
+        isValidEmail,
+        isValidPhone;
 import 'package:project/core/components/app_button_variant.dart';
 import 'package:project/core/components/input_text_field.dart';
 import 'package:project/core/controllers/user_controller.dart';
@@ -7,6 +15,7 @@ import 'package:project/core/models/user_model.dart';
 import 'package:project/core/services/api_client.dart';
 import 'package:project/core/theme/app_colors.dart';
 import 'package:project/core/theme/app_text_styles.dart';
+import 'package:project/core/utils/input_formatters.dart';
 
 /// Cadastro (RF 3.1.3) e edição de usuário, feitos pelo Aprovador.
 /// Se [user] for nulo, funciona como CADASTRO; caso contrário, EDIÇÃO.
@@ -60,7 +69,9 @@ class _UserFormPageState extends State<UserFormPage> {
     final u = widget.user;
     name = u?.name ?? '';
     email = u?.email ?? '';
-    phone = u?.phone ?? '';
+    phone = PhoneInputFormatter.formatPhone(
+      (u?.phone ?? '').replaceAll(RegExp('[^0-9]'), ''),
+    );
     role = u?.role ?? '';
     department = u?.department ?? '';
     cnhNumber = u?.cnhNumber ?? '';
@@ -78,26 +89,53 @@ class _UserFormPageState extends State<UserFormPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  /// Confere o formato de cada campo (mesmas chaves que a API usa).
+  Map<String, String> _validate() {
+    final e = <String, String>{};
+    void letters(String key, String value, String label) {
+      if (value.trim().isEmpty) {
+        e[key] = 'Informe $label.';
+      } else if (!isOnlyLetters(value)) {
+        e[key] = 'Use apenas letras.';
+      }
+    }
+
+    letters('name', name, 'o nome');
+    letters('role', role, 'o cargo');
+    letters('department', department, 'o setor');
+    if (!isEditing && !isValidEmail(email)) e['email'] = 'E-mail inválido.';
+    if (phone.isNotEmpty && !isValidPhone(phone)) {
+      e['phone'] = 'Use (22) 99999-0000 ou o ramal.';
+    }
+    if (cnhNumber.isNotEmpty && !isValidCnhNumber(cnhNumber)) {
+      e['cnhNumber'] = 'A CNH tem 11 números.';
+    }
+    if (!isEditing && !PasswordRules(password).isValid) {
+      e['password'] = 'A senha não atende aos requisitos.';
+    }
+    return e;
+  }
+
   Future<void> _save() async {
     if (_saving) return;
 
-    if (!isEditing && !PasswordRules(password).isValid) {
-      setState(
-        () => _errors = {'password': 'A senha não atende aos requisitos.'},
-      );
+    final errors = _validate();
+    if (errors.isNotEmpty) {
+      setState(() => _errors = errors);
+      _show('Verifique os campos destacados.');
       return;
     }
 
     final data = <String, dynamic>{
-      'name': name,
+      'name': name.trim(),
       'phone': phone,
-      'role': role,
-      'department': department,
+      'role': role.trim(),
+      'department': department.trim(),
       'cnhNumber': cnhNumber,
       'cnhCategory': cnhCategory,
       'cnhExpiry': cnhExpiry == null ? null : formatDate(cnhExpiry!),
       'profile': profile.name,
-      if (!isEditing) ...{'email': email, 'password': password},
+      if (!isEditing) ...{'email': email.trim(), 'password': password},
     };
 
     setState(() {
@@ -107,13 +145,14 @@ class _UserFormPageState extends State<UserFormPage> {
     try {
       if (isEditing) {
         await UserController.instance.updateUser(widget.user!.id, data);
-        _show('Usuário atualizado com sucesso!');
+        _show('Usuário atualizado.');
       } else {
         await UserController.instance.createUser(data);
-        _show('Usuário cadastrado. Informe a senha inicial ao colaborador.');
+        _show('Usuário cadastrado.');
       }
       if (mounted) Navigator.of(context).pop();
     } on ApiError catch (e) {
+      if (!mounted) return;
       setState(() => _errors = e.fields);
       _show(e.message);
     } finally {
@@ -137,145 +176,178 @@ class _UserFormPageState extends State<UserFormPage> {
       backgroundColor: AppColors.background,
       body: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Column(
-          children: [
-            const SizedBox(height: 10),
-            _field(
-              'name',
-              InputTextField(
-                label: 'Nome completo',
-                hint: 'Ex.: Ana Ribeiro',
-                inputText: name,
-                onChanged: (t) => name = t,
-              ),
-            ),
-            if (isEditing)
-              _readOnly('E-mail (login)', email)
-            else
+        // Largura total: sem isso a coluna encolhe e os campos ficam à esquerda.
+        child: SizedBox(
+          width: double.infinity,
+          child: Column(
+            children: [
+              const SizedBox(height: 10),
               _field(
-                'email',
+                'name',
                 InputTextField(
-                  label: 'E-mail (login)',
-                  hint: 'nome.sobrenome@empresa.com',
-                  keyboardType: TextInputType.emailAddress,
-                  inputText: email,
-                  onChanged: (t) => email = t,
+                  label: 'Nome completo',
+                  hint: 'Ex.: Ana Ribeiro',
+                  inputText: name,
+                  inputFormatters: AppFormatters.letters,
+                  textCapitalization: TextCapitalization.words,
+                  onChanged: (t) => name = t,
                 ),
               ),
-            _field(
-              'phone',
-              InputTextField(
-                label: 'Telefone / ramal (opcional)',
-                hint: 'Ex.: (22) 99999-0000',
-                keyboardType: TextInputType.phone,
-                inputText: phone,
-                onChanged: (t) => phone = t,
-              ),
-            ),
-            _field(
-              'role',
-              InputTextField(
-                label: 'Cargo',
-                hint: 'Ex.: Técnica de Campo',
-                inputText: role,
-                onChanged: (t) => role = t,
-              ),
-            ),
-            _field(
-              'department',
-              InputTextField(
-                label: 'Setor',
-                hint: 'Ex.: Operações',
-                inputText: department,
-                onChanged: (t) => department = t,
-              ),
-            ),
-            _field(
-              'cnhNumber',
-              InputTextField(
-                label: 'Nº da CNH',
-                type: InputFieldType.number,
-                hint: 'Obrigatória para o perfil Padrão',
-                inputText: cnhNumber,
-                onChanged: (t) => cnhNumber = t,
-              ),
-            ),
-            const SizedBox(height: 10),
-            _dropdown<String?>(
-              label: 'Categoria da CNH',
-              value: cnhCategory,
-              items: [null, ..._cnhCategories],
-              labelBuilder: (c) => c ?? 'Não informada',
-              onChanged: (v) => setState(() => cnhCategory = v),
-            ),
-            _field(
-              'cnhExpiry',
-              InputTextField(
-                label: 'Validade da CNH',
-                type: InputFieldType.date,
-                hint: 'Selecione a data',
-                inputText: _fmtDate(cnhExpiry),
-                firstDate: DateTime(2000),
-                onChanged: (_) {},
-                onDateSelected: (d) => setState(() => cnhExpiry = d),
-              ),
-            ),
-            const SizedBox(height: 10),
-            _dropdown<UserProfile>(
-              label: 'Perfil de acesso',
-              value: profile,
-              items: UserProfile.values,
-              labelBuilder: (p) => p.label,
-              enabled: !_isSelf,
-              onChanged: (v) => setState(() => profile = v),
-            ),
-            if (_isSelf) _hint('Você não pode alterar o seu próprio perfil.'),
-            if (!isEditing) ...[
+              if (isEditing)
+                _readOnly('E-mail (login)', email)
+              else
+                _field(
+                  'email',
+                  InputTextField(
+                    label: 'E-mail (login)',
+                    hint: 'nome.sobrenome@empresa.com',
+                    keyboardType: TextInputType.emailAddress,
+                    inputText: email,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.deny(RegExp(r'\s')),
+                      LengthLimitingTextInputFormatter(120),
+                    ],
+                    onChanged: (t) => email = t,
+                  ),
+                ),
               _field(
-                'password',
+                'phone',
                 InputTextField(
-                  label: 'Senha inicial',
-                  type: InputFieldType.password,
-                  inputText: password,
-                  onChanged: (t) => setState(() => password = t),
+                  label: 'Telefone / ramal (opcional)',
+                  hint: 'Ex.: (22) 99999-0000',
+                  keyboardType: TextInputType.phone,
+                  inputText: phone,
+                  inputFormatters: AppFormatters.phone,
+                  onChanged: (t) => phone = t,
                 ),
               ),
-              _rule(
-                'Mínimo de ${PasswordRules.minLength} caracteres',
-                rules.hasMinLength,
+              _field(
+                'role',
+                InputTextField(
+                  label: 'Cargo',
+                  hint: 'Ex.: Técnica de Campo',
+                  inputText: role,
+                  inputFormatters: AppFormatters.letters,
+                  textCapitalization: TextCapitalization.sentences,
+                  onChanged: (t) => role = t,
+                ),
               ),
-              _rule('Pelo menos 1 número', rules.hasNumber),
-              _rule('Pelo menos 1 caractere especial', rules.hasSpecial),
+              _field(
+                'department',
+                InputTextField(
+                  label: 'Setor',
+                  hint: 'Ex.: Operações',
+                  inputText: department,
+                  inputFormatters: AppFormatters.letters,
+                  textCapitalization: TextCapitalization.sentences,
+                  onChanged: (t) => department = t,
+                ),
+              ),
+              _field(
+                'cnhNumber',
+                InputTextField(
+                  label: 'Nº da CNH',
+                  type: InputFieldType.number,
+                  hint: '11 números (obrigatória para o perfil Padrão)',
+                  inputText: cnhNumber,
+                  inputFormatters: AppFormatters.digits(11),
+                  onChanged: (t) => cnhNumber = t,
+                ),
+              ),
+              const SizedBox(height: 10),
+              _dropdown<String?>(
+                label: 'Categoria da CNH',
+                value: cnhCategory,
+                items: [null, ..._cnhCategories],
+                labelBuilder: (c) => c ?? 'Não informada',
+                onChanged: (v) => setState(() => cnhCategory = v),
+              ),
+              _field(
+                'cnhExpiry',
+                InputTextField(
+                  label: 'Validade da CNH',
+                  type: InputFieldType.date,
+                  hint: 'Selecione a data',
+                  inputText: _fmtDate(cnhExpiry),
+                  firstDate: DateTime(2000),
+                  onChanged: (_) {},
+                  onDateSelected: (d) => setState(() => cnhExpiry = d),
+                ),
+              ),
+              const SizedBox(height: 10),
+              _dropdown<UserProfile>(
+                label: 'Perfil de acesso',
+                value: profile,
+                items: UserProfile.values,
+                labelBuilder: (p) => p.label,
+                enabled: !_isSelf,
+                onChanged: (v) => setState(() => profile = v),
+              ),
+              if (_isSelf)
+                SizedBox(
+                  width: MediaQuery.of(context).size.width * 0.8,
+                  child: _hint('Você não pode alterar o próprio perfil.'),
+                ),
+              if (!isEditing) ...[
+                _field(
+                  'password',
+                  InputTextField(
+                    label: 'Senha inicial',
+                    type: InputFieldType.password,
+                    inputText: password,
+                    onChanged: (t) => setState(() => password = t),
+                  ),
+                ),
+                SizedBox(
+                  width: MediaQuery.of(context).size.width * 0.8,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _rule(
+                        'Mínimo de ${PasswordRules.minLength} caracteres',
+                        rules.hasMinLength,
+                      ),
+                      _rule('Pelo menos 1 número', rules.hasNumber),
+                      _rule(
+                        'Pelo menos 1 caractere especial',
+                        rules.hasSpecial,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 32),
+              AppButton(
+                label: _saving
+                    ? 'Salvando...'
+                    : (isEditing ? 'Salvar alterações' : 'Cadastrar'),
+                onPressed: _save,
+              ),
+              const SizedBox(height: 10),
+              AppButton(
+                variant: AppButtonVariant.cancel,
+                label: 'Cancelar',
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              const SizedBox(height: 20),
             ],
-            const SizedBox(height: 32),
-            AppButton(
-              label: _saving
-                  ? 'Salvando...'
-                  : (isEditing ? 'Salvar alterações' : 'Cadastrar'),
-              onPressed: _save,
-            ),
-            const SizedBox(height: 10),
-            AppButton(
-              variant: AppButtonVariant.cancel,
-              label: 'Cancelar',
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            const SizedBox(height: 20),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  /// Campo + mensagem de erro da API (quando houver).
+  /// Campo + mensagem de erro (quando houver).
   Widget _field(String key, Widget field) {
     final error = _errors[key];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         field,
+        // Mesma largura do campo, para não deslocar a coluna.
         if (error != null)
-          Padding(
+          Container(
+            width: MediaQuery.of(context).size.width * 0.8,
             padding: const EdgeInsets.only(left: 8, top: 4),
             child: Text(
               error,

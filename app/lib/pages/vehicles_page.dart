@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:project/core/components/load_state.dart';
 import 'package:project/core/components/vehicle_card.dart';
+import 'package:project/core/services/feedback.dart';
 import 'package:project/core/controllers/request_controller.dart';
 import 'package:project/core/controllers/user_controller.dart';
 import 'package:project/core/models/user_model.dart';
@@ -24,12 +26,15 @@ class VehiclesPage extends StatelessWidget {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  /// Requisito 3.2.4: o veículo é desativado, nunca apagado,
-  /// para manter o histórico das solicitações que o usaram.
+  /// Requisito 3.2.4: desativar tira o veículo da frota e mantém o
+  /// histórico das solicitações que o usaram.
   Future<void> _toggleActive(BuildContext context, VehicleModel vehicle) async {
     if (vehicle.status == VehicleStatus.inativo) {
-      VehicleController.instance.reactivateVehicle(vehicle.id);
-      _showMessage(context, 'Veículo reativado e disponível na frota.');
+      await runWithFeedback(
+        context,
+        () => VehicleController.instance.reactivateVehicle(vehicle.id),
+        success: 'Veículo reativado.',
+      );
       return;
     }
 
@@ -39,8 +44,7 @@ class VehiclesPage extends StatelessWidget {
     if (bookings.any((r) => r.status == RequestStatus.emUso)) {
       _showMessage(
         context,
-        'O veículo está em uso. Registre a devolução (check-in) '
-        'antes de desativá-lo.',
+        'O veículo está em uso. Registre a devolução primeiro.',
       );
       return;
     }
@@ -54,12 +58,10 @@ class VehiclesPage extends StatelessWidget {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Desativar veículo'),
         content: Text(
-          'O veículo ${vehicle.model} (${vehicle.plate}) deixará de aparecer '
-          'para novos agendamentos. O histórico de uso é mantido e você pode '
-          'reativá-lo depois.'
+          'Tem certeza de que deseja desativar o veículo ${vehicle.model} '
+          '(${vehicle.plate})? Esta ação poderá ser desfeita.'
           '${approved.isEmpty ? '' : '\n\n${approved.length} reserva(s) '
-                    'aprovada(s) voltarão para "Pendente" e precisarão '
-                    'de outro veículo.'}',
+                    'voltarão para aprovação.'}',
         ),
         actions: [
           TextButton(
@@ -79,9 +81,58 @@ class VehiclesPage extends StatelessWidget {
 
     if (confirmed != true || !context.mounted) return;
 
-    RequestController.instance.releaseBookings(approved.map((r) => r.id));
-    VehicleController.instance.deactivateVehicle(vehicle.id);
-    _showMessage(context, 'Veículo desativado.');
+    // O servidor devolve as reservas aprovadas para Pendente e avisa
+    // os solicitantes.
+    var released = 0;
+    final ok = await runWithFeedback(
+      context,
+      () async => released = await VehicleController.instance.deactivateVehicle(
+        vehicle.id,
+      ),
+    );
+    if (!ok || !context.mounted) return;
+    _showMessage(
+      context,
+      released == 0
+          ? 'Veículo desativado.'
+          : 'Veículo desativado. $released reserva(s) voltaram para '
+                'aprovação.',
+    );
+  }
+
+  /// Exclusão definitiva: a API só deixa se o veículo nunca foi usado em
+  /// uma solicitação (com histórico, o caminho é desativar).
+  Future<void> _delete(BuildContext context, VehicleModel vehicle) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Excluir veículo'),
+        content: Text(
+          'Tem certeza de que deseja excluir o veículo ${vehicle.model} '
+          '(${vehicle.plate})? Esta ação não poderá ser desfeita.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Excluir',
+              style: TextStyle(color: AppColors.rejected),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    await runWithFeedback(
+      context,
+      () => VehicleController.instance.deleteVehicle(vehicle.id),
+      success: 'Veículo excluído.',
+    );
   }
 
   @override
@@ -112,33 +163,51 @@ class VehiclesPage extends StatelessWidget {
               ),
             )
           : null,
-      body: AnimatedBuilder(
-        animation: VehicleController.instance,
-        builder: (context, _) {
-          final vehicles = VehicleController.instance.vehicles;
+      body: RefreshOnOpen(
+        loaders: [
+          VehicleController.instance.load,
+          // Para avisar antes de desativar um veículo com reservas.
+          if (canEdit) RequestController.instance.load,
+        ],
+        child: AnimatedBuilder(
+          animation: VehicleController.instance,
+          builder: (context, _) {
+            final controller = VehicleController.instance;
+            final vehicles = controller.vehicles;
 
-          if (vehicles.isEmpty) {
-            return _emptyState(canEdit);
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 100),
-            itemCount: vehicles.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 16),
-            itemBuilder: (context, index) {
-              final vehicle = vehicles[index];
-              return VehicleCard(
-                vehicle: vehicle,
-                onEdit: canEdit
-                    ? () => _openForm(context, vehicle: vehicle)
-                    : null,
-                onToggleActive: canEdit
-                    ? () => _toggleActive(context, vehicle)
-                    : null,
+            if (vehicles.isEmpty) {
+              return LoadState(
+                loading: controller.loading,
+                error: controller.error,
+                onRetry: controller.load,
+                empty: _emptyState(canEdit),
               );
-            },
-          );
-        },
+            }
+
+            return RefreshIndicator(
+              onRefresh: controller.load,
+              child: ListView.separated(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 100),
+                itemCount: vehicles.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 16),
+                itemBuilder: (context, index) {
+                  final vehicle = vehicles[index];
+                  return VehicleCard(
+                    vehicle: vehicle,
+                    onEdit: canEdit
+                        ? () => _openForm(context, vehicle: vehicle)
+                        : null,
+                    onToggleActive: canEdit
+                        ? () => _toggleActive(context, vehicle)
+                        : null,
+                    onDelete: canEdit ? () => _delete(context, vehicle) : null,
+                  );
+                },
+              ),
+            );
+          },
+        ),
       ),
     );
   }

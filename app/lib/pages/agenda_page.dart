@@ -119,6 +119,8 @@ class _AgendaPageState extends State<AgendaPage> {
   void initState() {
     super.initState();
     _anchor = _dateOnly(DateTime.now());
+    RequestController.instance.load();
+    VehicleController.instance.load();
 
     // Atualiza a linha do "agora" a cada minuto.
     _clock = Timer.periodic(const Duration(minutes: 1), (_) {
@@ -1191,11 +1193,13 @@ class _VehiclePickerSheetState extends State<_VehiclePickerSheet> {
   List<VehicleModel> get _filtered {
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return widget.vehicles;
+    // Placa sem hífen: "abc1" encontra "ABC-1D23".
+    String bare(String s) => s.toLowerCase().replaceAll('-', '');
     return widget.vehicles
         .where(
           (v) =>
               v.model.toLowerCase().contains(q) ||
-              v.plate.toLowerCase().contains(q),
+              bare(v.plate).contains(bare(q)),
         )
         .toList();
   }

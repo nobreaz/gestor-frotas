@@ -13,6 +13,7 @@ dependencies:
   # Domínio compartilhado com o app (modelos, enums e regras em Dart puro).
   frota_core:
     path: ../packages/frota_core
+  googleapis_auth: ^2.3.7
   http: ^1.6.0
   postgres: ^3.5.20
 

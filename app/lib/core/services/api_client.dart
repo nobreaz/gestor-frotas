@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:project/core/config/app_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -17,6 +18,10 @@ class ApiError implements Exception {
   final Map<String, String> fields;
 
   bool get isUnauthorized => statusCode == 401;
+
+  /// Texto para mostrar ao usuário: o problema de cada campo, se houver
+  /// (mais útil que "Verifique os campos destacados." num aviso).
+  String get details => fields.isEmpty ? message : fields.values.join('\n');
 
   @override
   String toString() => message;
@@ -36,6 +41,8 @@ class ApiClient {
   Future<dynamic> get(String path) => _send('GET', path);
   Future<dynamic> post(String path, Object body) => _send('POST', path, body);
   Future<dynamic> patch(String path, Object body) => _send('PATCH', path, body);
+  Future<dynamic> delete(String path, [Object? body]) =>
+      _send('DELETE', path, body);
 
   Future<dynamic> _send(String method, String path, [Object? body]) async {
     final token = Supabase.instance.client.auth.currentSession?.accessToken;
@@ -51,9 +58,15 @@ class ApiClient {
       response = await http.Response.fromStream(
         await _http.send(request).timeout(_timeout),
       );
+      if (kDebugMode) {
+        debugPrint('[api] $method ${request.url} -> ${response.statusCode}');
+        if (response.statusCode >= 400) debugPrint('[api]   ${response.body}');
+      }
     } on TimeoutException {
+      if (kDebugMode) debugPrint('[api] $method ${request.url} -> TIMEOUT');
       throw const ApiError('O servidor demorou para responder. Tente de novo.');
-    } on http.ClientException {
+    } on http.ClientException catch (e) {
+      if (kDebugMode) debugPrint('[api] $method ${request.url} -> ERRO: $e');
       throw const ApiError(
         'Não foi possível conectar ao servidor. Verifique sua conexão.',
       );

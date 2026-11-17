@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:frota_core/frota_core.dart' show PasswordRules;
 import 'package:project/core/components/app_button_variant.dart';
 import 'package:project/core/components/input_text_field.dart';
+import 'package:project/core/components/password_requirements.dart';
 import 'package:project/core/controllers/user_controller.dart';
 import 'package:project/core/services/api_client.dart';
 import 'package:project/core/theme/app_colors.dart';
@@ -52,7 +53,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
       return;
     }
     if (!_matches) {
-      _show('A confirmação não confere com a nova senha.');
+      _show('As senhas não conferem.');
       return;
     }
     if (newPassword == currentPassword) {
@@ -67,7 +68,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
         newPassword,
       );
       if (!mounted) return;
-      _show('Senha alterada com sucesso!');
+      _show('Senha alterada.');
       Navigator.of(context).pop();
     } on ApiError catch (e) {
       _show(e.message);
@@ -87,126 +88,75 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
       ),
-      body: Container(
-        color: AppColors.background,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            return SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                child: IntrinsicHeight(
-                  child: KeyedSubtree(
-                    key: ValueKey(_formVersion),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        const SizedBox(height: 20),
-                        InputTextField(
-                          label: 'Senha atual',
-                          type: InputFieldType.password,
-                          inputText: '',
-                          hint: '********',
-                          onChanged: (text) =>
-                              setState(() => currentPassword = text),
-                        ),
-                        const SizedBox(height: 20),
-                        InputTextField(
-                          label: 'Nova senha',
-                          type: InputFieldType.password,
-                          inputText: '',
-                          hint: '********',
-                          onChanged: (text) =>
-                              setState(() => newPassword = text),
-                        ),
-                        const SizedBox(height: 20),
-                        InputTextField(
-                          label: 'Confirmar nova senha',
-                          type: InputFieldType.password,
-                          inputText: '',
-                          hint: '********',
-                          onChanged: (text) =>
-                              setState(() => confirmPassword = text),
-                        ),
-                        const SizedBox(height: 20),
-                        _requirements(),
-                        const Spacer(),
-                        const SizedBox(height: 40),
-                        AppButton(
-                          label: _saving ? 'Salvando...' : 'Confirmar',
-                          onPressed: _submit,
-                        ),
-                        const SizedBox(height: 10),
-                        AppButton(
-                          variant: AppButtonVariant.cancel,
-                          label: 'Limpar',
-                          onPressed: _clear,
-                        ),
-                        const SizedBox(height: 20),
-                      ],
-                    ),
+      backgroundColor: AppColors.background,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            // Largura total: sem isso a coluna encolhe para a largura dos
+            // campos e fica encostada à esquerda.
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: constraints.maxHeight,
+                minWidth: constraints.maxWidth - 40,
+              ),
+              child: IntrinsicHeight(
+                child: KeyedSubtree(
+                  key: ValueKey(_formVersion),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const SizedBox(height: 20),
+                      InputTextField(
+                        label: 'Senha atual',
+                        type: InputFieldType.password,
+                        inputText: '',
+                        hint: '********',
+                        onChanged: (text) =>
+                            setState(() => currentPassword = text),
+                      ),
+                      const SizedBox(height: 20),
+                      InputTextField(
+                        label: 'Nova senha',
+                        type: InputFieldType.password,
+                        inputText: '',
+                        hint: '********',
+                        onChanged: (text) => setState(() => newPassword = text),
+                      ),
+                      const SizedBox(height: 20),
+                      InputTextField(
+                        label: 'Confirmar nova senha',
+                        type: InputFieldType.password,
+                        inputText: '',
+                        hint: '********',
+                        onChanged: (text) =>
+                            setState(() => confirmPassword = text),
+                      ),
+                      const SizedBox(height: 20),
+                      PasswordRequirements(
+                        password: newPassword,
+                        confirmation: confirmPassword,
+                      ),
+                      const Spacer(),
+                      const SizedBox(height: 40),
+                      AppButton(
+                        label: _saving ? 'Salvando...' : 'Confirmar',
+                        onPressed: _submit,
+                      ),
+                      const SizedBox(height: 10),
+                      AppButton(
+                        variant: AppButtonVariant.cancel,
+                        label: 'Limpar',
+                        onPressed: _clear,
+                      ),
+                      const SizedBox(height: 20),
+                    ],
                   ),
                 ),
               ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  /// Lista de requisitos que marca ✓ conforme o usuário digita.
-  Widget _requirements() {
-    return Container(
-      width: MediaQuery.of(context).size.width * 0.8,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'A nova senha precisa ter:',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textMuted,
             ),
-          ),
-          const SizedBox(height: 6),
-          _rule(_hasMinLength, 'No mínimo 6 caracteres'),
-          _rule(_hasNumber, 'Pelo menos 1 número'),
-          _rule(_hasSpecial, 'Pelo menos 1 caractere especial (ex.: @ # !)'),
-          _rule(_matches, 'Confirmação igual à nova senha'),
-        ],
-      ),
-    );
-  }
-
-  Widget _rule(bool ok, String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        children: [
-          Icon(
-            ok ? Icons.check_circle : Icons.radio_button_unchecked,
-            size: 16,
-            color: ok ? AppColors.approved : AppColors.iconMuted,
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: ok ? Colors.black87 : AppColors.textMuted,
-              ),
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }

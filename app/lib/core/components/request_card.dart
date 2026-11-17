@@ -13,6 +13,9 @@ class RequestCard extends StatelessWidget {
   final VoidCallback? onCheckOut;
   final VoidCallback? onCheckIn;
 
+  /// "Não consegui retirar o veículo" (aprovada, a partir do dia da saída).
+  final VoidCallback? onPickupFailure;
+
   /// Mostra quem pediu (visão do Aprovador, que vê pedidos de todos).
   final bool showRequester;
 
@@ -23,6 +26,7 @@ class RequestCard extends StatelessWidget {
     this.onEdit,
     this.onCheckOut,
     this.onCheckIn,
+    this.onPickupFailure,
     this.showRequester = false,
   });
 
@@ -141,6 +145,37 @@ class RequestCard extends StatelessWidget {
             ),
           ],
 
+          // Retirada falhou: aguardando outro veículo ou encerrada.
+          if (request.needsReallocation) ...[
+            const SizedBox(height: 10),
+            _banner(
+              color: AppColors.rejected,
+              icon: Icons.car_crash_outlined,
+              text:
+                  'Retirada não realizada (${_failureText()}). '
+                  'Aguardando outro veículo.',
+            ),
+          ],
+          if (request.status == RequestStatus.cancelada &&
+              request.pickupFailedAt != null) ...[
+            const SizedBox(height: 10),
+            _banner(
+              color: AppColors.canceled,
+              icon: Icons.event_repeat,
+              text: 'Encerrada para reagendamento (${_failureText()}).',
+            ),
+          ],
+
+          // Cancelada pelo sistema: explica o motivo.
+          if (request.cancellationReason != null) ...[
+            const SizedBox(height: 10),
+            _banner(
+              color: AppColors.canceled,
+              icon: Icons.event_busy,
+              text: request.cancellationReason!.label,
+            ),
+          ],
+
           if (request.wasReturnedLate) ...[
             const SizedBox(height: 10),
             _banner(
@@ -212,6 +247,23 @@ class RequestCard extends StatelessWidget {
               onPressed: onCheckOut!,
             ),
           ],
+          if (onPickupFailure != null) ...[
+            const SizedBox(height: 4),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton.icon(
+                onPressed: onPickupFailure,
+                icon: const Icon(Icons.car_crash_outlined, size: 18),
+                label: const Text(
+                  'Não consegui retirar o veículo',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.rejected,
+                ),
+              ),
+            ),
+          ],
           if (onCheckIn != null) ...[
             const SizedBox(height: 12),
             _actionButton(
@@ -266,6 +318,11 @@ class RequestCard extends StatelessWidget {
       ),
     );
   }
+
+  String _failureText() => [
+    ?request.pickupFailureReason?.label,
+    ?request.pickupFailureNotes,
+  ].join(': ');
 
   Widget _actionButton({
     required String label,

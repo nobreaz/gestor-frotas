@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../theme/app_colors.dart' show AppColors;
 
@@ -9,6 +10,7 @@ class AuthTextField extends StatefulWidget {
   final bool obscureable;
   final TextInputType? keyboardType;
   final double widthFactor;
+  final List<TextInputFormatter>? inputFormatters;
 
   const AuthTextField({
     super.key,
@@ -18,6 +20,7 @@ class AuthTextField extends StatefulWidget {
     this.obscureable = false,
     this.keyboardType,
     this.widthFactor = 0.8,
+    this.inputFormatters,
   });
 
   @override
@@ -47,6 +50,7 @@ class _AuthTextFieldState extends State<AuthTextField> {
         onChanged: widget.onChanged,
         obscureText: widget.obscureable ? _obscure : false,
         keyboardType: widget.keyboardType,
+        inputFormatters: widget.inputFormatters,
         decoration: InputDecoration(
           border: const OutlineInputBorder(borderSide: BorderSide.none),
           labelText: widget.label,

@@ -1,76 +1,30 @@
 import 'package:frota_core/frota_core.dart';
-import 'package:frota_server/src/api_exception.dart';
+import 'package:frota_server/src/json_reader.dart';
 
-/// Lê e valida o JSON das rotas de usuário.
-///
-/// Os nomes dos campos são os do [UserModel.toJson] (os mesmos que o app usa).
-/// Todos os erros são juntados e devolvidos de uma vez (HTTP 400), para o app
-/// marcar todos os campos inválidos.
-class _Reader {
-  _Reader(this.json);
-
-  final Map<String, dynamic> json;
-  final errors = <String, String>{};
-
-  bool has(String key) => json.containsKey(key);
-
-  /// Texto obrigatório e não vazio.
-  String requiredText(String key, String label) {
-    final value = json[key];
-    if (value is String && value.trim().isNotEmpty) return value.trim();
-    errors[key] = '$label é obrigatório.';
-    return '';
+/// Formato dos campos de texto do cadastro (vale no POST e no PATCH).
+void _checkFormats(JsonReader r) {
+  String? text(String key) {
+    final value = r.json[key];
+    return value is String ? value.trim() : null;
   }
 
-  /// Texto opcional: vazio ou `null` vira `null` (apaga o valor).
-  String? optionalText(String key) {
-    final value = json[key];
-    if (value == null) return null;
-    if (value is! String) {
-      errors[key] = 'Deve ser um texto.';
-      return null;
-    }
-    return value.trim().isEmpty ? null : value.trim();
-  }
-
-  /// Data `AAAA-MM-DD` opcional.
-  DateTime? optionalDate(String key) {
-    final value = json[key];
-    if (value == null) return null;
-    final parsed = value is String ? DateTime.tryParse(value) : null;
-    if (parsed == null) {
-      errors[key] = 'Data inválida. Use o formato AAAA-MM-DD.';
-      return null;
-    }
-    return DateTime(parsed.year, parsed.month, parsed.day);
-  }
-
-  UserProfile? profile(String key) {
-    final value = json[key];
-    for (final p in UserProfile.values) {
-      if (p.name == value) return p;
-    }
-    errors[key] =
-        'Perfil deve ser '
-        '${UserProfile.values.map((p) => '"${p.name}"').join(', ')}.';
-    return null;
-  }
-
-  bool? boolean(String key) {
-    final value = json[key];
-    if (value is bool) return value;
-    errors[key] = 'Deve ser true ou false.';
-    return null;
-  }
-
-  void throwIfInvalid() {
-    if (errors.isNotEmpty) {
-      throw ApiException.badRequest(
-        'Verifique os campos destacados.',
-        fields: errors,
-      );
-    }
-  }
+  const letters = 'Use apenas letras.';
+  r
+    ..format('name', text('name'), isOnlyLetters, letters)
+    ..format('role', text('role'), isOnlyLetters, letters)
+    ..format('department', text('department'), isOnlyLetters, letters)
+    ..format(
+      'phone',
+      text('phone'),
+      isValidPhone,
+      'Telefone inválido. Use (22) 99999-0000 ou o ramal.',
+    )
+    ..format(
+      'cnhNumber',
+      text('cnhNumber'),
+      isValidCnhNumber,
+      'A CNH tem 11 números.',
+    );
 }
 
 /// Corpo de `POST /usuarios`: o Administrador cadastra um colaborador
@@ -79,7 +33,7 @@ class NewUserInput {
   NewUserInput._(this.user, this.password);
 
   factory NewUserInput.fromJson(Map<String, dynamic> json) {
-    final r = _Reader(json);
+    final r = JsonReader(json);
 
     final email = r.requiredText('email', 'E-mail').toLowerCase();
     if (email.isNotEmpty && !isValidEmail(email)) {
@@ -108,6 +62,7 @@ class NewUserInput {
           : UserProfile.padrao,
     );
 
+    _checkFormats(r);
     r.throwIfInvalid();
     return NewUserInput._(user, password as String);
   }
@@ -121,7 +76,7 @@ class NewUserInput {
 ///
 /// Devolve as alterações já com os nomes das colunas do banco.
 Map<String, Object?> parseUserUpdate(Map<String, dynamic> json) {
-  final r = _Reader(json);
+  final r = JsonReader(json);
   final changes = <String, Object?>{};
 
   if (r.has('email')) r.errors['email'] = 'O e-mail não pode ser alterado.';
@@ -139,18 +94,20 @@ Map<String, Object?> parseUserUpdate(Map<String, dynamic> json) {
   if (r.has('profile')) changes['perfil'] = r.profile('profile')?.name;
   if (r.has('active')) changes['ativo'] = r.boolean('active');
 
+  _checkFormats(r);
   r.throwIfInvalid();
   return changes;
 }
 
 /// Corpo de `PATCH /me`: o próprio usuário só altera o telefone.
 Map<String, Object?> parseMeUpdate(Map<String, dynamic> json) {
-  final r = _Reader(json);
+  final r = JsonReader(json);
   final others = json.keys.where((k) => k != 'phone');
   for (final key in others) {
     r.errors[key] = 'Só o telefone pode ser alterado pelo próprio usuário.';
   }
   final changes = {if (r.has('phone')) 'telefone': r.optionalText('phone')};
+  _checkFormats(r);
   r.throwIfInvalid();
   return changes;
 }

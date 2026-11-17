@@ -2,7 +2,8 @@
 ///
 /// Ciclo previsto na regra 4.2 do documento:
 /// Pendente → Aprovada → Em uso → Finalizada
-/// (ou, a partir de Pendente: Negada / Cancelada)
+/// (ou, a partir de Pendente: Negada / Cancelada; Aprovada ainda não
+/// retirada também pode ser Cancelada)
 enum RequestStatus {
   pendente,
   aprovada,
@@ -67,6 +68,76 @@ extension ReturnPeriodX on ReturnPeriod {
   String get description => 'até ${endHour}h';
 }
 
+/// Por que o solicitante não conseguiu retirar o veículo.
+enum PickupFailureReason { naoDevolvido, problemaVeiculo, outro }
+
+extension PickupFailureReasonX on PickupFailureReason {
+  String get label {
+    switch (this) {
+      case PickupFailureReason.naoDevolvido:
+        return 'O veículo não foi devolvido da viagem anterior';
+      case PickupFailureReason.problemaVeiculo:
+        return 'O veículo está com problema';
+      case PickupFailureReason.outro:
+        return 'Outro motivo';
+    }
+  }
+
+  /// "Outro" exige observação.
+  bool get requiresNotes => this == PickupFailureReason.outro;
+}
+
+/// Por que o SISTEMA cancelou a solicitação. Nulo quando foi o próprio
+/// solicitante que cancelou.
+enum CancellationReason {
+  /// Pendente que ninguém aprovou até o fim do dia da saída.
+  semAprovacao,
+
+  /// Aprovada cujo veículo não foi retirado até o fim do dia da saída.
+  naoRetirada,
+
+  /// O Administrador desativou o solicitante.
+  usuarioDesativado,
+
+  /// O solicitante deixou de ser do perfil Padrão.
+  perfilAlterado,
+}
+
+extension CancellationReasonX on CancellationReason {
+  /// Texto mostrado no card da solicitação.
+  String get label {
+    switch (this) {
+      case CancellationReason.semAprovacao:
+        return 'Cancelada automaticamente: a data de saída passou sem '
+            'aprovação.';
+      case CancellationReason.naoRetirada:
+        return 'Cancelada automaticamente: o veículo não foi retirado no '
+            'dia da saída.';
+      case CancellationReason.usuarioDesativado:
+        return 'Cancelada porque o acesso do solicitante foi desativado.';
+      case CancellationReason.perfilAlterado:
+        return 'Cancelada porque o perfil do solicitante foi alterado.';
+    }
+  }
+}
+
+/// O que o solicitante quer depois de não conseguir retirar o veículo.
+enum PickupFailureAction {
+  /// A solicitação volta para Pendente (urgente) e os Aprovadores escolhem
+  /// outro veículo.
+  novoVeiculo,
+
+  /// A solicitação é cancelada e o solicitante abre outra com novas datas.
+  reagendar,
+}
+
+/// Margem de segurança entre reservas do mesmo veículo (pedido do
+/// professor): o veículo só fica livre à meia-noite do dia seguinte ao
+/// retorno. Ex.: retorno na segunda → livre a partir de terça 00h.
+/// Vale só para o veículo (RN 4.3), não para o usuário (RN 4.4).
+DateTime vehicleFreeFrom(DateTime returnDay) =>
+    DateTime(returnDay.year, returnDay.month, returnDay.day + 1);
+
 /// Dois intervalos `[aStart, aEnd)` e `[bStart, bEnd)` se sobrepõem?
 /// Base das regras 4.3 (veículo) e 4.4 (usuário). Encostar não conta:
 /// uma devolução às 12h não conflita com uma saída às 12h.
@@ -120,6 +191,16 @@ class RequestModel {
   String? approverName;
   DateTime? decidedAt;
 
+  /// Falha na retirada informada pelo solicitante: quando, por quê, a
+  /// observação e o veículo que não pôde ser retirado.
+  DateTime? pickupFailedAt;
+  PickupFailureReason? pickupFailureReason;
+  String? pickupFailureNotes;
+  int? pickupFailedVehicleId;
+
+  /// Por que o sistema cancelou (nulo se o solicitante cancelou).
+  CancellationReason? cancellationReason;
+
   RequestModel({
     required this.id,
     required this.reason,
@@ -142,6 +223,11 @@ class RequestModel {
     this.approverId,
     this.approverName,
     this.decidedAt,
+    this.pickupFailedAt,
+    this.pickupFailureReason,
+    this.pickupFailureNotes,
+    this.pickupFailedVehicleId,
+    this.cancellationReason,
   });
 
   /// Formato JSON trocado entre a API e o app.
@@ -155,6 +241,8 @@ class RequestModel {
 
     final returnDate = json['returnDate'] as String?;
     final period = json['returnPeriod'] as String?;
+    final failure = json['pickupFailureReason'] as String?;
+    final cancellation = json['cancellationReason'] as String?;
     return RequestModel(
       id: json['id'] as int,
       requesterId: json['requesterId'] as int,
@@ -177,6 +265,15 @@ class RequestModel {
       approverId: json['approverId'] as int?,
       approverName: json['approverName'] as String?,
       decidedAt: instant('decidedAt'),
+      pickupFailedAt: instant('pickupFailedAt'),
+      pickupFailureReason: failure == null
+          ? null
+          : PickupFailureReason.values.byName(failure),
+      pickupFailureNotes: json['pickupFailureNotes'] as String?,
+      pickupFailedVehicleId: json['pickupFailedVehicleId'] as int?,
+      cancellationReason: cancellation == null
+          ? null
+          : CancellationReason.values.byName(cancellation),
     );
   }
 
@@ -209,6 +306,11 @@ class RequestModel {
       'approverId': approverId,
       'approverName': approverName,
       'decidedAt': instant(decidedAt),
+      'pickupFailedAt': instant(pickupFailedAt),
+      'pickupFailureReason': pickupFailureReason?.name,
+      'pickupFailureNotes': pickupFailureNotes,
+      'pickupFailedVehicleId': pickupFailedVehicleId,
+      'cancellationReason': cancellationReason?.name,
     };
   }
 
@@ -243,6 +345,35 @@ class RequestModel {
   /// Pode ser editada? Somente antes do check-out.
   bool get canEdit =>
       status == RequestStatus.pendente || status == RequestStatus.aprovada;
+
+  /// O solicitante pode cancelar? Antes da retirada: pendente ou aprovada
+  /// (cancelar uma aprovada libera o veículo).
+  bool get canCancel => canEdit;
+
+  /// Momento a partir do qual o veículo alocado fica livre para outra
+  /// reserva (margem de um dia, ver [vehicleFreeFrom]).
+  DateTime? get vehicleFreeAt {
+    final date = returnDate;
+    return date == null ? null : vehicleFreeFrom(date);
+  }
+
+  /// Voltou para Pendente porque o solicitante não conseguiu retirar o
+  /// veículo: o Aprovador precisa alocar outro com urgência.
+  bool get needsReallocation =>
+      status == RequestStatus.pendente && pickupFailedAt != null;
+
+  /// O solicitante pode informar que não conseguiu retirar o veículo:
+  /// aprovada e a partir do dia da saída.
+  bool canReportPickupFailure({DateTime? now}) {
+    final d = departure;
+    if (status != RequestStatus.aprovada || d == null) return false;
+    final today = now ?? DateTime.now();
+    return !DateTime(
+      today.year,
+      today.month,
+      today.day,
+    ).isBefore(DateTime(d.year, d.month, d.day));
+  }
 
   /// Data de saída passou e o veículo não foi retirado.
   bool get isCheckOutLate =>

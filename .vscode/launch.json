@@ -8,6 +8,14 @@
       "cwd": "app",
       "program": "lib/main.dart",
       "toolArgs": ["--dart-define-from-file=env/dev.json"]
+    },
+    {
+      "name": "App (Android emulador)",
+      "type": "dart",
+      "request": "launch",
+      "cwd": "app",
+      "program": "lib/main.dart",
+      "toolArgs": ["--dart-define-from-file=env/android.json"]
     }
   ]
 }

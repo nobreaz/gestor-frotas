@@ -2,8 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:project/core/components/request_card.dart';
 import 'package:project/core/controllers/request_controller.dart';
 import 'package:project/core/controllers/user_controller.dart';
+import 'package:project/core/controllers/vehicle_controller.dart';
+import 'package:project/core/components/load_state.dart';
 import 'package:project/core/models/request_model.dart';
+import 'package:project/core/models/vehicle_model.dart';
+import 'package:project/core/services/api_client.dart';
+import 'package:project/core/services/feedback.dart';
 import 'package:project/core/theme/app_colors.dart';
+import 'package:project/core/utils/input_formatters.dart';
 import 'package:project/pages/new_request_page.dart';
 
 class MyRequestsPage extends StatelessWidget {
@@ -53,6 +59,7 @@ class MyRequestsPage extends StatelessWidget {
                 TextField(
                   controller: mileageController,
                   keyboardType: TextInputType.number,
+                  inputFormatters: AppFormatters.digits(7),
                   autofocus: true,
                   decoration: InputDecoration(
                     labelText: 'Quilometragem',
@@ -68,6 +75,8 @@ class MyRequestsPage extends StatelessWidget {
                 TextField(
                   controller: notesController,
                   maxLines: 3,
+                  inputFormatters: AppFormatters.freeText(),
+                  textCapitalization: TextCapitalization.sentences,
                   decoration: InputDecoration(
                     labelText: 'Observações (opcional)',
                     hintText: 'Ex.: nível de combustível, avarias...',
@@ -95,8 +104,7 @@ class MyRequestsPage extends StatelessWidget {
                 if (minimum != null && value < minimum) {
                   setDialogState(
                     () => errorText =
-                        minimumMessage ??
-                        'O valor deve ser maior ou igual a $minimum km.',
+                        minimumMessage ?? 'Informe no mínimo $minimum km.',
                   );
                   return;
                 }
@@ -120,30 +128,242 @@ class MyRequestsPage extends StatelessWidget {
       context,
       title: 'Retirada do veículo',
       description: vehicle == null
-          ? 'Informe a quilometragem atual do painel.'
-          : 'Informe a quilometragem atual do painel do '
+          ? 'Informe a quilometragem do painel.'
+          : 'Informe a quilometragem do painel do '
                 '${vehicle.model} (${vehicle.plate}).',
       minimum: minimum,
       minimumMessage:
-          'A km de saída não pode ser menor que a '
-          'quilometragem atual do veículo ($minimum km).',
+          'Não pode ser menor que a km atual do veículo ($minimum km).',
     );
     if (result == null) return;
 
-    final ok = RequestController.instance.checkOut(
-      request.id,
-      result.mileage,
-      notes: result.notes,
+    if (!context.mounted) return;
+    try {
+      await RequestController.instance.checkOut(
+        request.id,
+        result.mileage,
+        notes: result.notes,
+      );
+      if (context.mounted) {
+        showSnack(context, 'Retirada registrada.');
+      }
+    } on ApiError catch (e) {
+      if (!context.mounted) return;
+      // Veículo não devolvido, em manutenção...: oferece o fluxo de
+      // "não consegui retirar" em vez de só mostrar o erro.
+      if (e.statusCode == 409 && request.canReportPickupFailure()) {
+        await _reportPickupFailure(
+          context,
+          request,
+          problem: e.message,
+          suggested: vehicle?.status == VehicleStatus.emUso
+              ? PickupFailureReason.naoDevolvido
+              : PickupFailureReason.problemaVeiculo,
+        );
+      } else {
+        showSnack(context, e.details);
+      }
+    }
+  }
+
+  /// "Não consegui retirar o veículo": pergunta o motivo e depois se a
+  /// pessoa quer outro veículo (Aprovadores avisados) ou reagendar (a
+  /// solicitação é encerrada e abre uma nova já preenchida).
+  /// [problem]: mensagem do servidor quando a retirada foi recusada.
+  Future<void> _reportPickupFailure(
+    BuildContext context,
+    RequestModel request, {
+    String? problem,
+    PickupFailureReason? suggested,
+  }) async {
+    final failure = await _askFailureReason(
+      context,
+      problem: problem,
+      suggested: suggested,
+    );
+    if (failure == null || !context.mounted) return;
+
+    final action = await _askFailureAction(context);
+    if (action == null || !context.mounted) return;
+
+    final ok = await runWithFeedback(
+      context,
+      () => RequestController.instance.reportPickupFailure(
+        request.id,
+        reason: failure.reason,
+        action: action,
+        notes: failure.notes,
+      ),
+      success: action == PickupFailureAction.novoVeiculo
+          ? 'Pedido de outro veículo enviado.'
+          : 'Solicitação encerrada. Escolha as novas datas.',
+    );
+    if (!ok || !context.mounted) return;
+
+    if (action == PickupFailureAction.reagendar) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => NewRequestPage(copyFrom: request)),
+      );
+    }
+  }
+
+  /// Passo 1: o que aconteceu (motivo + observação; "Outro" exige texto).
+  Future<({PickupFailureReason reason, String? notes})?> _askFailureReason(
+    BuildContext context, {
+    String? problem,
+    PickupFailureReason? suggested,
+  }) {
+    var reason = suggested;
+    final notesController = TextEditingController();
+    String? notesError;
+
+    return showDialog<({PickupFailureReason reason, String? notes})>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Não consegui retirar o veículo'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (problem != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.rejected.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      problem,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                const Text(
+                  'O que aconteceu?',
+                  style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+                ),
+                RadioGroup<PickupFailureReason>(
+                  groupValue: reason,
+                  onChanged: (value) => setDialogState(() => reason = value),
+                  child: Column(
+                    children: [
+                      for (final r in PickupFailureReason.values)
+                        RadioListTile<PickupFailureReason>(
+                          value: r,
+                          title: Text(
+                            r.label,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: notesController,
+                  maxLines: 3,
+                  inputFormatters: AppFormatters.freeText(),
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    labelText: reason?.requiresNotes ?? false
+                        ? 'Descreva o que aconteceu'
+                        : 'Observações (opcional)',
+                    hintText: 'Ex.: pneu furado, chave não estava na portaria',
+                    errorText: notesError,
+                    alignLabelWithHint: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Voltar'),
+            ),
+            TextButton(
+              onPressed: reason == null
+                  ? null
+                  : () {
+                      final notes = notesController.text.trim();
+                      if (reason!.requiresNotes && notes.isEmpty) {
+                        setDialogState(
+                          () => notesError = 'Descreva o que aconteceu.',
+                        );
+                        return;
+                      }
+                      Navigator.of(dialogContext).pop((
+                        reason: reason!,
+                        notes: notes.isEmpty ? null : notes,
+                      ));
+                    },
+              child: const Text('Continuar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Passo 2: outro veículo ou reagendar.
+  Future<PickupFailureAction?> _askFailureAction(BuildContext context) {
+    Widget option(
+      BuildContext dialogContext, {
+      required PickupFailureAction action,
+      required IconData icon,
+      required String title,
+      required String subtitle,
+    }) => Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        leading: Icon(icon, color: AppColors.primary),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
+        onTap: () => Navigator.of(dialogContext).pop(action),
+      ),
     );
 
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          ok
-              ? 'Check-out registrado. Boa viagem!'
-              : 'Não foi possível registrar o check-out. Verifique a km.',
+    return showDialog<PickupFailureAction>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('O que você prefere?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            option(
+              dialogContext,
+              action: PickupFailureAction.novoVeiculo,
+              icon: Icons.swap_horiz,
+              title: 'Solicitar outro veículo',
+              subtitle: 'Mantém as datas e pede outro veículo.',
+            ),
+            option(
+              dialogContext,
+              action: PickupFailureAction.reagendar,
+              icon: Icons.event_repeat,
+              title: 'Reagendar a viagem',
+              subtitle: 'Encerra esta solicitação e abre uma nova.',
+            ),
+          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Voltar'),
+          ),
+        ],
       ),
     );
   }
@@ -154,31 +374,21 @@ class MyRequestsPage extends StatelessWidget {
     final result = await _askMileage(
       context,
       title: 'Devolução do veículo',
-      description:
-          'Informe a quilometragem do painel no momento '
-          'da devolução. A km do veículo será atualizada.',
+      description: 'Informe a quilometragem do painel.',
       minimum: minimum,
-      minimumMessage:
-          'A km de retorno não pode ser menor que a '
-          'km de saída ($minimum km).',
+      minimumMessage: 'Não pode ser menor que a km de saída ($minimum km).',
     );
     if (result == null) return;
 
-    final ok = RequestController.instance.checkIn(
-      request.id,
-      result.mileage,
-      notes: result.notes,
-    );
-
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          ok
-              ? 'Devolução registrada. Solicitação finalizada.'
-              : 'Não foi possível registrar a devolução. Verifique a km.',
-        ),
+    await runWithFeedback(
+      context,
+      () => RequestController.instance.checkIn(
+        request.id,
+        result.mileage,
+        notes: result.notes,
       ),
+      success: 'Devolução registrada.',
     );
   }
 
@@ -199,47 +409,103 @@ class MyRequestsPage extends StatelessWidget {
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
       ),
-      body: Container(
-        color: AppColors.background,
-        child: AnimatedBuilder(
-          animation: RequestController.instance,
-          builder: (context, _) {
-            // Apenas as solicitações do usuário logado.
-            final userId = UserController.instance.currentUser.id;
-            final requests = RequestController.instance.requestsOf(userId);
+      body: RefreshOnOpen(
+        loaders: [
+          RequestController.instance.load,
+          VehicleController.instance.load,
+        ],
+        child: Container(
+          color: AppColors.background,
+          child: AnimatedBuilder(
+            animation: RequestController.instance,
+            builder: (context, _) {
+              // Apenas as solicitações do usuário logado.
+              final userId = UserController.instance.currentUser.id;
+              final controller = RequestController.instance;
+              final requests = controller.requestsOf(userId);
 
-            if (requests.isEmpty) {
-              return _emptyState();
-            }
-
-            return ListView.separated(
-              padding: const EdgeInsets.all(20),
-              itemCount: requests.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 16),
-              itemBuilder: (context, index) {
-                final request = requests[index];
-
-                return RequestCard(
-                  request: request,
-                  onCancel: request.status == RequestStatus.pendente
-                      ? () =>
-                            RequestController.instance.cancelRequest(request.id)
-                      : null,
-                  onEdit: request.canEdit
-                      ? () => _edit(context, request)
-                      : null,
-                  onCheckOut: request.status == RequestStatus.aprovada
-                      ? () => _checkOut(context, request)
-                      : null,
-                  onCheckIn: request.status == RequestStatus.emUso
-                      ? () => _checkIn(context, request)
-                      : null,
+              if (requests.isEmpty) {
+                return LoadState(
+                  loading: controller.loading,
+                  error: controller.error,
+                  onRetry: controller.load,
+                  empty: _emptyState(),
                 );
-              },
-            );
-          },
+              }
+
+              return RefreshIndicator(
+                onRefresh: controller.load,
+                child: _list(context, requests),
+              );
+            },
+          ),
         ),
       ),
+    );
+  }
+
+  /// Cancelamento antes da retirada (pendente ou aprovada). Na aprovada,
+  /// avisa que o veículo reservado será liberado.
+  Future<void> _cancel(BuildContext context, RequestModel request) async {
+    final approved = request.status == RequestStatus.aprovada;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancelar solicitação'),
+        content: Text(
+          approved
+              ? 'Tem certeza de que deseja cancelar? O veículo reservado será '
+                    'liberado. Esta ação não poderá ser desfeita.'
+              : 'Tem certeza de que deseja cancelar? Esta ação não poderá '
+                    'ser desfeita.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Voltar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Cancelar solicitação',
+              style: TextStyle(color: AppColors.rejected),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    await runWithFeedback(
+      context,
+      () => RequestController.instance.cancelRequest(request.id),
+      success: 'Solicitação cancelada.',
+    );
+  }
+
+  Widget _list(BuildContext context, List<RequestModel> requests) {
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(20),
+      itemCount: requests.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 16),
+      itemBuilder: (context, index) {
+        final request = requests[index];
+
+        return RequestCard(
+          request: request,
+          onCancel: request.canCancel ? () => _cancel(context, request) : null,
+          onEdit: request.canEdit ? () => _edit(context, request) : null,
+          onCheckOut: request.status == RequestStatus.aprovada
+              ? () => _checkOut(context, request)
+              : null,
+          onPickupFailure: request.canReportPickupFailure()
+              ? () => _reportPickupFailure(context, request)
+              : null,
+          onCheckIn: request.status == RequestStatus.emUso
+              ? () => _checkIn(context, request)
+              : null,
+        );
+      },
     );
   }
 

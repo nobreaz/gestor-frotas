@@ -11,7 +11,7 @@ Future<void> confirmLogout(BuildContext context) async {
     context: context,
     builder: (dialogContext) => AlertDialog(
       title: const Text('Sair da conta'),
-      content: const Text('Deseja realmente sair do aplicativo?'),
+      content: const Text('Deseja sair da conta?'),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(dialogContext).pop(false),
