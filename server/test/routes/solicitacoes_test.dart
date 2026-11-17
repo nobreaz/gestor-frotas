@@ -26,6 +26,7 @@ void main() {
   setUp(() {
     requests = MockSolicitacoesRepository();
     frota = MockFrotaService();
+    when(() => frota.expireStaleRequests()).thenAnswer((_) async => 0);
     when(() => frota.alertReservationsAtRisk()).thenAnswer((_) async => 0);
     when(
       () => requests.list(
@@ -85,13 +86,15 @@ void main() {
     );
   });
 
-  test('antes de listar, avisa reservas em risco; falha nisso não '
-      'derruba a listagem', () async {
+  test('antes de listar, cancela as vencidas e avisa reservas em risco; '
+      'falha nisso não derruba a listagem', () async {
+    when(() => frota.expireStaleRequests()).thenThrow(Exception('x'));
     when(() => frota.alertReservationsAtRisk()).thenThrow(Exception('x'));
 
     final body = await get('/solicitacoes', user(id: 9));
 
     expect(body, hasLength(1));
+    verify(() => frota.expireStaleRequests()).called(1);
     verify(() => frota.alertReservationsAtRisk()).called(1);
   });
 }
